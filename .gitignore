@@ -1,2 +1,5 @@
 wandb/
 __pycache__/
+ml_env/
+__pycache__/
+*.pyc

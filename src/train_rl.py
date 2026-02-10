@@ -1,26 +1,31 @@
 import torch
 import torch.optim as optim
 import wandb
-import imageio
-import io
 import numpy as np
+import io
+import imageio
+
 from gnn_agent import MoleculeAgent
 from chem_env import MoleculeEnvironment
+from ppo import PPOBuffer 
 from torch.distributions import Categorical
 from rdkit import RDLogger
 from rdkit.Chem import Draw
 
-RDLogger.DisableLog('rdApp.*')  # <--- This kills the noise
+RDLogger.DisableLog('rdApp.*')
 
-# --- CONFIG ---
 CONFIG = {
-    "episodes": 3000,          
-    "lr": 0.001,          
+    "lr": 0.0003,
     "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_epsilon": 0.2,   # PPO Clipping range
+    "entropy_coef": 0.05,  # Exploration
+    "value_coef": 0.5,     # Critic weight
+    "batch_size": 64,      # Mini-batch size
+    "ppo_epochs": 10,      # Reuse data 10 times
+    "buffer_size": 2048,   # Steps to collect before training
     "hidden_dim": 64,
-    "max_steps": 30,
-    "log_interval": 20,
-    "entropy_coef": 0.05    # Strength of exploration pressure
+    "max_steps": 30
 }
 
 def create_gif(mol_list, reward):
@@ -32,153 +37,141 @@ def create_gif(mol_list, reward):
         except:
             pass
     if len(images) == 0: return None
-    
-    # Save GIF to memory buffer
     with io.BytesIO() as gif_buffer:
         imageio.mimsave(gif_buffer, images, format='GIF', duration=0.5, loop=0)
-        
-        # --- FIX: Use wandb.Video directly with io.BytesIO ---
-        # Wrap the bytes in BytesIO so wandb treats it as a file
         return wandb.Video(io.BytesIO(gif_buffer.getvalue()), format='gif', caption=f"Reward: {reward:.2f}")
 
 def train():
     wandb.init(project="drug-design-rl", config=CONFIG)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Training on {device}")
+    print(f"🚀 PPO Training on {device}")
 
-    # 1. Initialize
     env = MoleculeEnvironment(device)
-    # 3 Features (C,N,O) and 4 Actions (Add C, Add N, Add O, Stop)
     agent = MoleculeAgent(num_node_features=3, num_actions=4, hidden_dim=CONFIG['hidden_dim']).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=CONFIG['lr'])
+    buffer = PPOBuffer(device, gamma=CONFIG['gamma'], gae_lambda=CONFIG['gae_lambda'])
 
-    # 2. Training Loop
-    for episode in range(CONFIG['episodes']):
-        x, edge_index, batch = env.reset()
-        done = False
-        total_reward = 0
-        step_count = 0
+    # Global counters
+    global_step = 0
+    episode_num = 0
+
+    # Main PPO Loop: "Collect -> Train -> Repeat" for a set number of updates
+    for update in range(500):
         
-        # Snapshot storage for GIF (Visuals)
-        mol_snapshots = [env.current_mol.GetMol()]
-
-        # Keep track of the game to learn later
-        log_probs = []
-        values = []
-        rewards = []
-        entropies = [] # For tracking entropy directly during rollout
-
-        # --- A. PLAY THE GAME (Rollout) ---
-        while not done and step_count < CONFIG['max_steps']:
-            # Get the mask from the environment
-            action_mask = env.get_action_mask() 
-            
-            # Ask the Agent what to do
-            logits, value = agent(x, edge_index, batch, action_mask.unsqueeze(0)) # Unsqueeze to add batch dim to action_mask (from [Num_Actions] to [1, Num_Actions]))
-            
-            # Sample an action from the probability distribution
-            probs = torch.softmax(logits, dim=1)
-            
-            # SAFETY: Handle NaN in probs if model explodes
-            if torch.isnan(probs).any():
-                print(" ⚠️  NaN detected in probabilities! Resetting episode.")
-                break
-            
-            m = Categorical(probs)  # Probability distribution (object) over actions
-            action = m.sample() # Tensor containing the sampled index
-            
-            # Execute the action in the environment
-            next_obs, reward, done = env.step(action.item())
-            
-            # Store data for learning
-            log_probs.append(m.log_prob(action))
-            values.append(value)
-            rewards.append(reward)
-            entropies.append(m.entropy()) # Calculate entropy of the decision
-            
-            # Update observation
-            mol_snapshots.append(env.current_mol.GetMol()) # Save frame for GIF
-            x, edge_index, batch = next_obs
-            total_reward += reward
-            step_count += 1
+        # --- PHASE 1: DATA COLLECTION ---
+        buffer.clear()
+        steps_collected = 0
         
-        # Skip update if episode broke early
-        if len(rewards) == 0:  continue
+        while steps_collected < CONFIG['buffer_size']:
+            # Start new episode
+            x, edge_index, batch_vec = env.reset()
+            done = False
+            ep_reward = 0
+            ep_len = 0
+            
+            mol_snapshots = [env.current_mol.GetMol()] # For GIF
 
-        # --- B. LEARN FROM EXPERIENCE (Update) ---
-        # Calculate Returns (Discounted Cumulative Reward)
-        returns = []
-        R = 0
-        for r in reversed(rewards):
-            R = r + CONFIG['gamma'] * R
-            returns.insert(0, R)
-        returns = torch.tensor(returns).to(device)
-        
-        # SAFETY: Normalize only if we have variance (len > 1)
-        if len(returns) > 1:
-            returns = (returns - returns.mean()) / (returns.std() + 1e-9)
-        else:
-            returns = returns - returns.mean() # Center arround zero
-        
-        # Calculate Loss
-        policy_loss = []   # Actor Loss: Did action lead to a good return?
-        value_loss = []    # Critic Loss: Was agent's prediction of the value accurate?
-        entropy_loss = []  # Track entropy
-        
-        for log_prob, value, R, entropy in zip(log_probs, values, returns, entropies):
-            advantage = R - value.item()
-            
-            # Reinforce algorithm - Policy Gradient: -log(p) * advantage
-            # Increase the probability of the action taken if we beat expectations, and decrease if we failed.
-            policy_loss.append(-log_prob * advantage)
-            
-            # Huber Loss: (Predicted - Actual)^2 - Manageable gradients
-            value_loss.append(torch.nn.functional.smooth_l1_loss(value, torch.tensor([[R]]).to(device)))
-
-            # Entropy Loss
-            entropy_loss.append(-entropy) # We minimize negative entropy to maximize randomness
-            
-        if len(policy_loss) > 0:
-            
-            optimizer.zero_grad()
-            
-            p_loss = torch.stack(policy_loss).sum() # Total policy loss for the entire episode
-            v_loss = torch.stack(value_loss).sum()  # Total value loss for the entire episode
-            e_loss = torch.stack(entropy_loss).sum() # Sum up entropy penalties
-            
-            loss = p_loss + v_loss + (CONFIG['entropy_coef'] * e_loss)  # Total loss
-            
-            loss.backward()
-
-            # Gradient Clipping
-            torch.nn.utils.clip_grad_norm_(agent.parameters(), max_norm=1.0)
-
-            optimizer.step()
-            
-            # Log only if update happened
-            if episode % CONFIG['log_interval'] == 0:
-                print(f"Episode {episode}, Reward: {total_reward:.4f}, Steps: {step_count}")
-                
-                # Create the GIF
-                gif_video = create_gif(mol_snapshots, total_reward)
-                
-                log_dict = {
-                    "episode": episode, 
-                    "reward": total_reward, 
-                    "loss": loss.item(),
-                    "steps": step_count,
-                    "entropy": -e_loss.item() / step_count # Log average entropy
-                }
-                
-                if gif_video:
-                    log_dict["molecule_construction"] = gif_video
+            while not done and ep_len < CONFIG['max_steps']:
+                # No grad for collection
+                with torch.no_grad():
+                    mask = env.get_action_mask()
+                    logits, value = agent(x, edge_index, batch_vec, mask.unsqueeze(0))
                     
-                wandb.log(log_dict)
-        else:
-            # Just log reward if no update
-             wandb.log({"episode": episode, "reward": total_reward})
+                    probs = torch.softmax(logits, dim=1)
+                    m = Categorical(probs)
+                    action = m.sample()
+                    log_prob = m.log_prob(action)
 
-    print(" ✅  Training Complete!")
+                # Step
+                next_obs, reward, done = env.step(action.item())
+                
+                # Store in buffer
+                # Note: We store the TUPLE (x, edge_index, batch_vec) as the "state"
+                buffer.push((x, edge_index, batch_vec, mask), action.item(), reward, done, log_prob.item(), value.item())
+                
+                # Update counters
+                x, edge_index, batch_vec = next_obs
+                ep_reward += reward
+                ep_len += 1
+                steps_collected += 1
+                global_step += 1
+                
+                mol_snapshots.append(env.current_mol.GetMol())
+
+            # Log Episode Stats
+            episode_num += 1
+            if episode_num % 20 == 0:
+                print(f"Update {update} | Ep {episode_num} | Reward: {ep_reward:.2f}")
+                log_data = {"episode_reward": ep_reward, "global_step": global_step}
+                
+                # Add GIF occasionally
+                if episode_num % 100 == 0:
+                    gif = create_gif(mol_snapshots, ep_reward)
+                    if gif: log_data["molecule"] = gif
+                
+                wandb.log(log_data)
+
+        # --- PHASE 2: CALCULATE GAE ---
+        # Get value of the VERY LAST state to bootstrap the calculation
+        with torch.no_grad():
+            mask = env.get_action_mask()
+            _, last_value = agent(x, edge_index, batch_vec, mask.unsqueeze(0))
+            
+        buffer.calculate_gae(last_value.item())
+
+        # --- PHASE 3: PPO TRAINING (EPOCHS) ---
+        for _ in range(CONFIG['ppo_epochs']):
+            # Iterate over mini-batches
+            for idxs, advantages, returns, actions, old_log_probs in buffer.get_batches(CONFIG['batch_size']):
+                
+                new_log_probs = torch.stack(new_log_probs).view(-1)
+                new_values = torch.stack(new_values).view(-1)
+                entropies = torch.stack(entropies).mean()
+                
+                # FIX: Use enumerate to get the local batch index (j) and the global buffer index (i)
+                for j, i in enumerate(idxs):
+                    # Retrieve the specific graph snapshot for this step
+                    (sx, sedge, sbatch, smask) = buffer.states[i] 
+                    
+                    logits, val = agent(sx, sedge, sbatch, smask.unsqueeze(0))
+                    
+                    probs = torch.softmax(logits, dim=1)
+                    m = Categorical(probs)
+                    
+                    # FIX: Use 'j' (local) to access the actions tensor, NOT 'i' (global)
+                    act = actions[j] 
+                    
+                    new_log_probs.append(m.log_prob(act))
+                    new_values.append(val)
+                    entropies.append(m.entropy())
+
+                # Stack results
+                new_log_probs = torch.stack(new_log_probs).squeeze()
+                new_values = torch.stack(new_values).squeeze()
+                entropies = torch.stack(entropies).mean() # Mean entropy
+
+                # --- PPO LOSS MATH ---
+                # 1. Ratio
+                ratio = torch.exp(new_log_probs - old_log_probs)
+                
+                # 2. Surrogate Loss (Clipped)
+                surr1 = ratio * advantages
+                surr2 = torch.clamp(ratio, 1 - CONFIG['clip_epsilon'], 1 + CONFIG['clip_epsilon']) * advantages
+                policy_loss = -torch.min(surr1, surr2).mean()
+                
+                # 3. Value Loss (MSE)
+                value_loss = torch.nn.functional.mse_loss(new_values, returns)
+                
+                # 4. Total Loss
+                loss = policy_loss + CONFIG['value_coef'] * value_loss - CONFIG['entropy_coef'] * entropies
+                
+                # Optimize
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
+                optimizer.step()
+
+    print("✅ PPO Training Complete!")
     wandb.finish()
 
 if __name__ == "__main__":
