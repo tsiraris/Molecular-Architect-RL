@@ -55,7 +55,8 @@ def train():
     global_step = 0
     episode_num = 0
 
-    # Main PPO Loop: "Collect -> Train -> Repeat" for a set number of updates
+    # Main PPO Loop: "Collect -> Train -> Repeat"
+    # We run for a set number of updates (e.g., 500 updates)
     for update in range(500):
         
         # --- PHASE 1: DATA COLLECTION ---
@@ -72,7 +73,7 @@ def train():
             mol_snapshots = [env.current_mol.GetMol()] # For GIF
 
             while not done and ep_len < CONFIG['max_steps']:
-                # No grad for collection
+                # No grad needed for collection
                 with torch.no_grad():
                     mask = env.get_action_mask()
                     logits, value = agent(x, edge_index, batch_vec, mask.unsqueeze(0))
@@ -86,7 +87,6 @@ def train():
                 next_obs, reward, done = env.step(action.item())
                 
                 # Store in buffer
-                # Note: We store the TUPLE (x, edge_index, batch_vec) as the "state"
                 buffer.push((x, edge_index, batch_vec, mask), action.item(), reward, done, log_prob.item(), value.item())
                 
                 # Update counters
@@ -124,11 +124,13 @@ def train():
             # Iterate over mini-batches
             for idxs, advantages, returns, actions, old_log_probs in buffer.get_batches(CONFIG['batch_size']):
                 
-                new_log_probs = torch.stack(new_log_probs).view(-1)
-                new_values = torch.stack(new_values).view(-1)
-                entropies = torch.stack(entropies).mean()
+                # --- THIS WAS THE MISSING BLOCK ---
+                new_log_probs = []
+                new_values = []
+                entropies = []
+                # ---------------------------------
                 
-                # FIX: Use enumerate to get the local batch index (j) and the global buffer index (i)
+                # Use enumerate to get the local batch index (j) and the global buffer index (i)
                 for j, i in enumerate(idxs):
                     # Retrieve the specific graph snapshot for this step
                     (sx, sedge, sbatch, smask) = buffer.states[i] 
@@ -138,7 +140,7 @@ def train():
                     probs = torch.softmax(logits, dim=1)
                     m = Categorical(probs)
                     
-                    # FIX: Use 'j' (local) to access the actions tensor, NOT 'i' (global)
+                    # Use 'j' (local) to access the actions tensor
                     act = actions[j] 
                     
                     new_log_probs.append(m.log_prob(act))
@@ -146,9 +148,10 @@ def train():
                     entropies.append(m.entropy())
 
                 # Stack results
-                new_log_probs = torch.stack(new_log_probs).squeeze()
-                new_values = torch.stack(new_values).squeeze()
-                entropies = torch.stack(entropies).mean() # Mean entropy
+                # FIX: Use .view(-1) to handle edge cases where batch_size=1
+                new_log_probs = torch.stack(new_log_probs).view(-1)
+                new_values = torch.stack(new_values).view(-1)
+                entropies = torch.stack(entropies).mean() 
 
                 # --- PPO LOSS MATH ---
                 # 1. Ratio

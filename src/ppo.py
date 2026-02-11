@@ -53,7 +53,7 @@ class PPOBuffer(Dataset):
             # If done=True, the "next state" is terminal, so value is 0.
             mask = 1 - self.dones[i] 
             
-            # Delta = Reward + gamma * Next_Value - Current_Value
+            # Delta = Reward + gamma * Next_Value - Current_Value      (if episode is done mask will zero out the next value)
             delta = self.rewards[i] + self.gamma * values[i+1] * mask - values[i]
             
             # GAE = Delta + gamma * lambda * Next_GAE
