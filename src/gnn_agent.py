@@ -59,7 +59,11 @@ class MoleculeAgent(nn.Module):
         if action_mask is not None:
             # Ensure mask is broadcastable if you are using batches later
             # Invert mask: We want to find the INVALID indices (1=Valid, 0=Invalid)
-            action_logits = action_logits.masked_fill(~action_mask, -1e9) # Ensures softmax gives ~0 prob to invalid actions
+            
+            # FIX: Use -1e4 instead of -1e9. 
+            # -1e9 causes overflow in float16 (Mixed Precision).
+            # -1e4 is essentially -infinity for Softmax, but safe for FP16.
+            action_logits = action_logits.masked_fill(~action_mask, -1e4) 
             
         return action_logits, state_value 
 
