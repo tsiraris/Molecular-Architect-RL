@@ -10,6 +10,7 @@ from chem_env import MoleculeEnvironment
 from ppo import PPOBuffer 
 from torch.distributions import Categorical
 from rdkit import RDLogger
+from rdkit import Chem
 from rdkit.Chem import Draw
 
 RDLogger.DisableLog('rdApp.*')
@@ -26,9 +27,9 @@ CONFIG = {
     "buffer_size": 2048,
     "hidden_dim": 64,
     "max_steps": 30,
-    # SOTA Updates:
     "input_feats": 9,  # C/N/O + Hybridization + Arom + Ring + Focus
-    "num_actions": 5   # C/N/O + Stop + Shift
+    "num_actions": 5,  # C/N/O + Stop + Shift
+    "edge_dim": 4      # Single/Double/Triple/Aromatic
 }
 
 def create_gif(mol_list, reward):
@@ -51,19 +52,15 @@ def train():
 
     env = MoleculeEnvironment(device)
     
-    # Initialize Agent with new feature dimensions
     agent = MoleculeAgent(
         num_node_features=CONFIG["input_feats"], 
         num_actions=CONFIG["num_actions"], 
-        hidden_dim=CONFIG['hidden_dim']
+        hidden_dim=CONFIG['hidden_dim'],
+        edge_dim=CONFIG['edge_dim']
     ).to(device)
     
     optimizer = optim.Adam(agent.parameters(), lr=CONFIG['lr'])
-    
-    # --- PERFORMANCE: Mixed Precision Scaler ---
-    # Fix: Use torch.amp.GradScaler('cuda') to avoid depreciation warning
-    scaler = torch.amp.GradScaler('cuda') 
-    
+    scaler = torch.cuda.amp.GradScaler() 
     buffer = PPOBuffer(device, gamma=CONFIG['gamma'], gae_lambda=CONFIG['gae_lambda'])
 
     global_step = 0
@@ -74,7 +71,7 @@ def train():
         steps_collected = 0
         
         while steps_collected < CONFIG['buffer_size']:
-            x, edge_index, batch_vec = env.reset()
+            x, edge_index, edge_attr, batch_vec = env.reset()
             done = False
             ep_reward = 0
             ep_len = 0
@@ -82,10 +79,9 @@ def train():
 
             while not done and ep_len < CONFIG['max_steps']:
                 with torch.no_grad():
-                    # Autocast is mostly for training, but good practice here too
                     with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
                         mask = env.get_action_mask()
-                        logits, value = agent(x, edge_index, batch_vec, mask.unsqueeze(0))
+                        logits, value = agent(x, edge_index, edge_attr, batch_vec, mask.unsqueeze(0))
                         probs = torch.softmax(logits, dim=1)
                         
                     m = Categorical(probs)
@@ -93,29 +89,46 @@ def train():
                     log_prob = m.log_prob(action)
 
                 next_obs, reward, done = env.step(action.item())
-                buffer.push((x, edge_index, batch_vec, mask), action.item(), reward, done, log_prob.item(), value.item())
+                x_next, edge_next, attr_next, batch_next = next_obs
                 
-                x, edge_index, batch_vec = next_obs
+                buffer.push((x, edge_index, edge_attr, batch_vec, mask), action.item(), reward, done, log_prob.item(), value.item())
+                
+                x, edge_index, edge_attr, batch_vec = x_next, edge_next, attr_next, batch_next
                 ep_reward += reward
                 ep_len += 1
                 steps_collected += 1
                 global_step += 1
                 mol_snapshots.append(env.current_mol.GetMol())
 
+            # --- LOGGING UPDATES ---
             episode_num += 1
             if episode_num % 20 == 0:
-                print(f"Update {update} | Ep {episode_num} | Reward: {ep_reward:.2f}")
-                log_data = {"episode_reward": ep_reward, "global_step": global_step}
+                # Get SMILES string
+                try:
+                    episode_smiles = Chem.MolToSmiles(env.current_mol.GetMol())
+                except:
+                    episode_smiles = "INVALID"
+
+                print(f"Update {update} | Ep {episode_num} | Reward: {ep_reward:.2f} | SMILES: {episode_smiles}")
+                
+                log_data = {
+                    "episode_reward": ep_reward, 
+                    "global_step": global_step,
+                    "molecule_smiles": episode_smiles,
+                    "molecule_size": env.current_mol.GetNumAtoms()
+                }
+                
                 if episode_num % 100 == 0:
                     gif = create_gif(mol_snapshots, ep_reward)
-                    if gif: log_data["molecule"] = gif
+                    if gif: log_data["molecule_video"] = gif
+                
                 wandb.log(log_data)
 
         # GAE Calculation
         with torch.no_grad():
             with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
                 mask = env.get_action_mask()
-                _, last_value = agent(x, edge_index, batch_vec, mask.unsqueeze(0))
+                _, last_value = agent(x, edge_index, edge_attr, batch_vec, mask.unsqueeze(0))
         buffer.calculate_gae(last_value.item())
 
         # PPO Update Loop
@@ -126,11 +139,11 @@ def train():
                 new_values = []
                 entropies = []
                 
-                # --- PERFORMANCE: Mixed Precision Training ---
                 with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
                     for j, i in enumerate(idxs):
-                        (sx, sedge, sbatch, smask) = buffer.states[i]
-                        logits, val = agent(sx, sedge, sbatch, smask.unsqueeze(0))
+                        (sx, sedge, sattr, sbatch, smask) = buffer.states[i]
+                        
+                        logits, val = agent(sx, sedge, sattr, sbatch, smask.unsqueeze(0))
                         probs = torch.softmax(logits, dim=1)
                         m = Categorical(probs)
                         
@@ -151,14 +164,10 @@ def train():
                     
                     loss = policy_loss + CONFIG['value_coef'] * value_loss - CONFIG['entropy_coef'] * entropies
                 
-                # --- PERFORMANCE: Scaled Backward Pass ---
                 optimizer.zero_grad()
                 scaler.scale(loss).backward()
-                
-                # Unscale before clipping!
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
-                
                 scaler.step(optimizer)
                 scaler.update()
 

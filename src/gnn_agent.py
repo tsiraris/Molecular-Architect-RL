@@ -1,111 +1,85 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, global_mean_pool
-from torch_geometric.data import Data, Batch
+from torch_geometric.nn import GINEConv, GATv2Conv
+from torch_geometric.nn.aggr import AttentionalAggregation #
 
 class MoleculeAgent(nn.Module):
-    def __init__(self, num_node_features, num_actions, hidden_dim=64):
+    def __init__(self, num_node_features, num_actions, hidden_dim=64, edge_dim=4):
         super(MoleculeAgent, self).__init__()
         
-        # 1. GRAPH ENCODER - GCNConv layers allow information to flow between atoms (nodes)
-        self.conv1 = GCNConv(num_node_features, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim * 2)
-        self.conv3 = GCNConv(hidden_dim * 2, hidden_dim * 2)
+        # 1. GRAPH ENCODER
+        
+        # Layer 1: GINEConv (Graph Isomorphism Network with Edges) - Captures structure (local chemical environments) for maximal expressiveness
+        # An MLP able to learn arbitrarily complex rules about how to combine an atom with its neighbors.
+        self.gin_mlp = nn.Sequential(
+            nn.Linear(num_node_features, hidden_dim), 
+            nn.ReLU(), 
+            nn.Linear(hidden_dim, hidden_dim) # output shape: [num_nodes, hidden_dim]
+        ) 
+        
+        # Before the neighbor's info is added to the center atom, the bond info is added (linear projection) to the neighbor
+        self.conv1 = GINEConv(self.gin_mlp, edge_dim=edge_dim) 
 
-        # 2. ACTOR HEAD - Decides what to do next based on the graph embedding
+        # Layer 2: GATv2 (Graph Attention Network v2) - Captures long-range dependencies and importance (which neighbors are more important for the current task)
+        # Assigns a learnable score (attention weight​) to every bond, deciding how much information to "absorb" from that neighbor for each pairing of nodes
+        self.conv2 = GATv2Conv(hidden_dim, hidden_dim, heads=4, concat=True, edge_dim=edge_dim) # num_heads independent attention "committees", leading to a hidden_dim * num_heads col size (concat=True)
+        
+        # Layer 3: GATv2 (Refining)
+        self.conv3 = GATv2Conv(hidden_dim * 4, hidden_dim * 2, heads=2, concat=False, edge_dim=edge_dim) # Final graph embedding - [num_nodes,hidden_dim * 2] (concat=False means: average the heads instead of concatenating)
+        
+        # 2. GLOBAL POOLING (Attention-based)
+        # Pool gate: Small NN  that looks at each node's final embedding and outputs a score (0 to 1) that determines how much that node should contribute to the final graph embedding (how "interesting" it is).
+        self.pool_gate = nn.Sequential(nn.Linear(hidden_dim * 2, 1), nn.Sigmoid())
+        
+        # AttentionalAggregation uses these scores to weight the nodes when summing them up into a single graph embedding vector (global representation of the molecule). 
+        # This allows the model to focus on the most relevant parts of the molecule for decision-making.
+        self.pool = AttentionalAggregation(self.pool_gate) # Output shape: [batch_size, hidden_dim * 2]
+
+        # 3. ACTOR HEAD
         self.actor = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, num_actions)  # Output: Logits for each possible action
+            nn.Linear(hidden_dim, num_actions)
         )
 
-        # 3. CRITIC HEAD - Predicts how good the current state is (scalar value)
+        # 4. CRITIC HEAD
         self.critic = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 1)  # Output: Single score (Value)
+            nn.Linear(hidden_dim, 1)
         )
 
-    def forward(self, x, edge_index, batch, action_mask=None):
-        """
-        x: Node features (Atom types)
-        edge_index: Graph connectivity (Bonds)
-        batch: Keeps track of which nodes belong to which molecule in a batch
-        """
+    def forward(self, x, edge_index, edge_attr, batch, action_mask=None):
         
-        # --- Stage 1: Message Passing (Graph Convolution) ---
-        # Layer 1 - One hop knowledge aggregation
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)   # --> x is a context-aware representation of each atom now
+        # --- Layer 1: GINE (Local Chemistry) ---
+        x = self.conv1(x, edge_index, edge_attr)
+        x = F.relu(x)
         
-        # Layer 2 - Two hops
-        x = self.conv2(x, edge_index)
+        # --- Layer 2: GATv2 (Attention) ---
+        x = self.conv2(x, edge_index, edge_attr)
         x = F.relu(x)
 
-        # Layer 3
-        x = self.conv3(x, edge_index)
-        x = F.relu(x)  # [Num_Atoms, Hidden_Dim*2]
+        # --- Layer 3: GATv2 (Deep Reasoning) ---
+        x = self.conv3(x, edge_index, edge_attr)
+        x = F.relu(x)
 
-        # --- Stage 2: Global Pooling (Readout) ---
-        # Collapse the whole graph (molecule) into a single vector - all atomic information into a "Molecule Vector"
-        graph_embedding = global_mean_pool(x, batch) # [Num_Molecules, Hidden_Dim*2]
+        # --- Readout: Global Attention Pooling ---
+        graph_embedding = self.pool(x, batch) 
 
-        # --- Stage 3: Heads ---
-        action_logits = self.actor(graph_embedding) # [Num_Molecules, Num_Actions] - Will be used for action selection
-        state_value = self.critic(graph_embedding)  # [Num_Molecules, 1] - Value estimation/Baseline expectation
+        # --- Heads ---
+        action_logits = self.actor(graph_embedding)
+        state_value = self.critic(graph_embedding)
 
-        # --- Stage 4: Action Masking ---
+        # --- Safe Masking ---
         if action_mask is not None:
-            # Ensure mask is broadcastable if you are using batches later
-            # Invert mask: We want to find the INVALID indices (1=Valid, 0=Invalid)
+            # 1. Invert mask (True where invalid)
+            invalid_mask = ~action_mask
             
-            # FIX: Use -1e4 instead of -1e9. 
-            # -1e9 causes overflow in float16 (Mixed Precision).
-            # -1e4 is essentially -infinity for Softmax, but safe for FP16.
-            action_logits = action_logits.masked_fill(~action_mask, -1e4) 
+            # 2. Get the smallest representable number for the current dtype (float16 or float32)
+            min_value = torch.finfo(action_logits.dtype).min
+
+            # 3. Fill with that safe minimum instead of -1e9
+            action_logits = action_logits.masked_fill(invalid_mask, min_value)
             
-        return action_logits, state_value 
-
-# --- VERIFICATION BLOCK --- Debug without training
-if __name__ == "__main__":
-    print("🧠 INITIALIZING GNN AGENT...")
-    
-    # 1. Setup Dummy Data
-    # For a dummy molecule with 3 atoms (Nodes) and 2 bonds (Edges)
-    dummy_x = torch.tensor([
-        [1.0, 0.0, 0.0], # Atom 1 (Carbon)
-        [0.0, 1.0, 0.0], # Atom 2 (Nitrogen)
-        [1.0, 0.0, 0.0]  # Atom 3 (Carbon)
-    ], dtype=torch.float)
-    
-    # Edges (Connections: 0-1 and 1-2) using Coordinate Format (COO)
-    dummy_edge_index = torch.tensor([
-        [0, 1, 1, 2], # Source Nodes
-        [1, 0, 2, 1]  # Target Nodes (Undirected = both ways)
-    ], dtype=torch.long)
-    
-    # Batch Vector (Assuming all nodes belong to Molecule 0)
-    dummy_batch = torch.tensor([0, 0, 0], dtype=torch.long)
-
-    # 2. Check Device (GPU)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"   Device: {device}")
-
-    # 3. Initialize Model
-    # Input features = 3 (size of one-hot vector), Actions = 5 (e.g., Add C, Add N, etc.)
-    agent = MoleculeAgent(num_node_features=3, num_actions=5).to(device)
-    
-    # Move data to GPU
-    dummy_x = dummy_x.to(device)
-    dummy_edge_index = dummy_edge_index.to(device)
-    dummy_batch = dummy_batch.to(device)
-
-    # 4. Forward Pass
-    logits, value = agent(dummy_x, dummy_edge_index, dummy_batch)
-    
-    print("\n✅ FORWARD PASS SUCCESSFUL")
-    print(f"   Action Logits Shape: {logits.shape} (Should be [1, {agent.num_actions}])")
-    print(f"   Critic Value: {value.item():.4f}")
-    
-    print("\n   The GNN successfully processed the molecular graph structure!")
+        return action_logits, state_value
