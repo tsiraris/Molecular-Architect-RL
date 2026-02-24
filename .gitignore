@@ -1,5 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Weights & Biases (generated)
 wandb/
-__pycache__/
-ml_env/
-__pycache__/
-*.pyc
+wandb-debug.log
+wandb-debug-internal.log
+
+# Model artifacts / checkpoints
+checkpoints/
+artifacts/
+*.pt
+*.pth
+*.ckpt
