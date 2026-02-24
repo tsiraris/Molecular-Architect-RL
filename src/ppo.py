@@ -1,10 +1,11 @@
 import torch
-from torch.utils.data import Dataset
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 
 class PPOBuffer(Dataset):
     """
-    Experience Replay Buffer for PPO.
-    Stores trajectories and computes Generalized Advantage Estimation (GAE).
+    Stores training data (trajectories) and calculates advantages (GAE).
+    Acts as a PyTorch Dataset for easy batching.
     """
     def __init__(self, device, gamma=0.99, gae_lambda=0.95):
         self.device = device
@@ -13,21 +14,25 @@ class PPOBuffer(Dataset):
         self.clear()
 
     def clear(self):
-        """Reset buffer for the next update cycle."""
-        # Raw storage (CPU RAM efficient lists)
-        self.states = []       
-        self.actions = []      
-        self.rewards = []      
-        self.dones = []        
-        self.log_probs = []    
-        self.values = []       
+        """
+        Clears all stored data. Call at the beginning of each PPO update cycle.
+        """
+        # Lists to store raw data from the environment
+        self.states = []       # To store complex tuples (x, edge_index, edge_attr...)
+        self.actions = []      # Action indices
+        self.rewards = []      # Raw rewards
+        self.dones = []        # Boolean flags
+        self.log_probs = []    # Log probabilities from the OLD policy
+        self.values = []       # Critic predictions from the OLD policy
         
-        # Computed tensors
+        # Lists to store processed data for training
         self.advantages = []
         self.returns = []
 
     def push(self, state_data, action, reward, done, log_prob, value):
-        """Add a transition to the buffer."""
+        """
+        Save one step of interaction.
+        """
         self.states.append(state_data) 
         self.actions.append(action)
         self.rewards.append(reward)
@@ -37,18 +42,18 @@ class PPOBuffer(Dataset):
 
     def calculate_gae(self, last_value):
         """
-        Compute GAE and Returns.
-        This smooths the reward signal and reduces variance in training.
+        Phase 2: Process the buffer to calculate GAE and Returns.
         """
         advantages = []
         gae = 0
         
+        # Append the "next value" to simplify the loop
         values = self.values + [last_value]
         
         for i in reversed(range(len(self.rewards))):
             mask = 1 - self.dones[i] 
-            delta = self.rewards[i] + self.gamma * values[i+1] * mask - values[i]
-            gae = delta + self.gamma * self.gae_lambda * mask * gae 
+            delta = self.rewards[i] + self.gamma * values[i+1] * mask - values[i]    # TD error (mask closes the episode if done)
+            gae = delta + self.gamma * self.gae_lambda * mask * gae                  # GAE recursion 
             advantages.insert(0, gae)
         
         self.advantages = torch.tensor(advantages, dtype=torch.float32).to(self.device)
@@ -56,7 +61,7 @@ class PPOBuffer(Dataset):
 
     def get_batches(self, batch_size):
         """
-        Yields randomized mini-batches for PPO updates.
+        Yields mini-batches of tensors for training.
         """
         total_samples = len(self.rewards)
         indices = torch.randperm(total_samples) 
