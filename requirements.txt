@@ -1,7 +1,8 @@
-torch>=2.0.0
+torch
 torch-geometric
+numpy
 rdkit
 wandb
-numpy
+tqdm
 matplotlib
-networkx
+pandas
