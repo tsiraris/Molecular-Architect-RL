@@ -20,3 +20,6 @@ artifacts/
 *.pt
 *.pth
 *.ckpt
+
+# Archives
+*.zip

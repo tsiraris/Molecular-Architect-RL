@@ -1,142 +1,110 @@
-import math
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Iterator, List, Sequence, Tuple
+import numpy as np
 import torch
-import torch.nn as nn
-from torch.distributions import Categorical
 
+@dataclass   # Dataclass Decorator to auto-generate __init__, __repr__, __eq__ etc.
+class Transition:
+    """ A single transition (step) in the environment. """
+    state: object  # opaque (graph tensors etc.)
+    action: int
+    reward: float
+    done: float
+    log_prob: float
+    value: float
 
 class PPOBuffer:
     """
-    Buffer for PPO transitions.
-    Stores (state, action, reward, value, logp) and computes GAE + advantages.
+    Vectorized-environment PPO buffer with per-env GAE.
+    We store transitions per-env, then compute GAE with proper bootstrapping using
+    the last value estimate for each env after collection.
     """
-
-    def __init__(self, buffer_size: int, obs_shape: tuple, device: torch.device):
+    def __init__(self, device: torch.device, num_envs: int, gamma: float = 0.99, gae_lambda: float = 0.95):
         self.device = device
-        self.buf_size = buffer_size
-        self.obs_shape = obs_shape
+        self.num_envs = num_envs
+        self.gamma = gamma
+        self.gae_lambda = gae_lambda
+        self.clear()
 
-        # Storage
-        self.states = torch.zeros((buffer_size, *obs_shape), device=device)
-        self.actions = torch.zeros(buffer_size, dtype=torch.long, device=device)
-        self.rewards = torch.zeros(buffer_size, device=device)
-        self.values = torch.zeros(buffer_size, device=device)
-        self.logp_old = torch.zeros(buffer_size, device=device)
+    def clear(self) -> None:
+        """ Clear the buffer. """
+        self._traj: List[List[Transition]] = [[] for _ in range(self.num_envs)]     # self._traj[e] is a List[Transition]
+        self.states: List[object] = []                                              # states is a List[object]
+        self.actions: torch.Tensor | None = None                                    # If self.actions is not None then it is a torch.Tensor
+        self.rewards: torch.Tensor | None = None
+        self.dones: torch.Tensor | None = None
+        self.log_probs: torch.Tensor | None = None
+        self.values: torch.Tensor | None = None
+        self.advantages: torch.Tensor | None = None
+        self.returns: torch.Tensor | None = None
 
-        # GAE / advantage
-        self.advantages = torch.zeros(buffer_size, device=device)
-        self.returns = torch.zeros(buffer_size, device=device)
+    def push(self, env_id: int, state, action: int, reward: float, done: float, log_prob: float, value: float) -> None:
+        """ Add a transition to the buffer. """
+        self._traj[int(env_id)].append(Transition(state, int(action), float(reward), float(done), float(log_prob), float(value)))
 
-        self.ptr = 0
-        self.full = False
-
-    def add(self, state: torch.Tensor, action: torch.Tensor, reward: float, value: float, logp: float):
+    def finalize(self, last_values: torch.Tensor) -> None:
         """
-        Add transition to buffer.
+        Compute GAE per env and flatten trajectories into training tensors.
+        last_values: shape [num_envs] value estimates for *current* obs after collection needed for bootstrapping GAE.
         """
-        self.states[self.ptr].copy_(state)
-        self.actions[self.ptr] = action
-        self.rewards[self.ptr] = reward
-        self.values[self.ptr] = value
-        self.logp_old[self.ptr] = logp
+        last_values = last_values.detach().float().to(self.device).view(-1)
+        assert last_values.numel() == self.num_envs      # assert that last_values.shape == (self.num_envs,)
 
-        self.ptr += 1
-        if self.ptr >= self.buf_size:
-            self.full = True
+        all_states: List[object] = []
+        all_actions, all_rewards, all_dones, all_logps, all_vals = [], [], [], [], []
+        all_advs, all_rets = [], []
 
-    def compute_advantages(self, last_value: float, gamma: float, lam: float):
+        # Compute GAE per env
+        for e in range(self.num_envs):
+            traj = self._traj[e]
+            if len(traj) == 0:
+                continue
+
+            rewards = np.array([t.reward for t in traj], dtype=np.float32)
+            dones = np.array([t.done for t in traj], dtype=np.float32)
+            values = np.array([t.value for t in traj], dtype=np.float32)
+
+            adv = np.zeros_like(rewards)
+            gae = 0.0
+            next_value = float(last_values[e].item())
+
+            for i in reversed(range(len(rewards))):
+                mask = 1.0 - dones[i]
+                delta = rewards[i] + self.gamma * next_value * mask - values[i]     # TD error
+                gae = delta + self.gamma * self.gae_lambda * mask * gae             # GAE
+                adv[i] = gae
+                next_value = values[i]
+
+            ret = adv + values          # return
+
+            for i, t in enumerate(traj):
+                all_states.append(t.state)
+                all_actions.append(t.action)
+                all_rewards.append(t.reward)
+                all_dones.append(t.done)
+                all_logps.append(t.log_prob)
+                all_vals.append(t.value)
+                all_advs.append(float(adv[i]))
+                all_rets.append(float(ret[i]))
+
+        self.states = all_states
+        self.actions = torch.tensor(all_actions, dtype=torch.long, device=self.device)
+        self.rewards = torch.tensor(all_rewards, dtype=torch.float32, device=self.device)
+        self.dones = torch.tensor(all_dones, dtype=torch.float32, device=self.device)
+        self.log_probs = torch.tensor(all_logps, dtype=torch.float32, device=self.device)
+        self.values = torch.tensor(all_vals, dtype=torch.float32, device=self.device)
+        self.advantages = torch.tensor(all_advs, dtype=torch.float32, device=self.device)
+        self.returns = torch.tensor(all_rets, dtype=torch.float32, device=self.device)
+
+    def get_batches(self, batch_size: int, shuffle: bool = True) -> Iterator[torch.Tensor]:
+        """ 
+        Get batches of indices from the buffer. 
+        Receives batch_size and shuffle as arguments and returns batches of indices.
         """
-        Compute GAE advantage and returns.
-        Must be called after buffer is full OR when episode ends.
-        """
-        adv = 0.0
-        self.returns[-1] = last_value
-
-        for step in reversed(range(self.ptr)):
-            delta = (
-                self.rewards[step]
-                + gamma * self.values[step + 1] if step + 1 < self.ptr else last_value
-                - self.values[step]
-            )
-            adv = delta + gamma * lam * adv
-            self.advantages[step] = adv
-            self.returns[step] = adv + self.values[step]
-
-        # Normalize advantages
-        self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
-
-    def clear(self):
-        """
-        Reset buffer for next update.
-        """
-        self.ptr = 0
-        self.full = False
-        self.states.zero_()
-        self.actions.zero_()
-        self.rewards.zero_()
-        self.values.zero_()
-        self.logp_old.zero_()
-        self.advantages.zero_()
-        self.returns.zero_()
-
-
-def ppo_update(
-    policy_net: nn.Module,
-    value_net: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    buffer: PPOBuffer,
-    clip_epsilon: float,
-    target_kl: float,
-    entropy_coef: float,
-    value_coef: float,
-    max_grad_norm: float,
-    epochs: int,
-):
-    """
-    Perform PPO update for one batch of transitions.
-    """
-
-    total_loss = 0.0
-    kl_divs = []
-
-    for _ in range(epochs):
-        # Evaluate current policy on stored states
-        dist = Categorical(logits=policy_net(buffer.states))
-        logp = dist.log_prob(buffer.actions)
-        ratio = torch.exp(logp - buffer.logp_old)
-
-        # clipped surrogate objective
-        adv = buffer.advantages
-        surr1 = ratio * adv
-        surr2 = torch.clamp(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * adv
-        policy_loss = -torch.min(surr1, surr2).mean()
-
-        # entropy bonus
-        entropy = dist.entropy().mean()
-        entropy_term = -entropy_coef * entropy
-
-        # value loss
-        values_pred = value_net(buffer.states).squeeze(-1)
-        value_loss = value_coef * (buffer.returns - values_pred).pow(2).mean()
-
-        # total loss
-        loss = policy_loss + entropy_term + value_loss
-        optimizer.zero_grad()
-        loss.backward()
-
-        # gradient norm clipping
-        torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_grad_norm)
-        torch.nn.utils.clip_grad_norm_(value_net.parameters(), max_grad_norm)
-
-        optimizer.step()
-        total_loss += loss.item()
-
-        # approximate KL divergence
-        with torch.no_grad():
-            kl = (buffer.logp_old - logp).mean().item()
-            kl_divs.append(kl)
-
-        # early stop if KL gets too large
-        if kl > target_kl:
-            break
-
-    return total_loss / epochs, sum(kl_divs) / len(kl_divs)
+        assert self.actions is not None and self.advantages is not None and self.returns is not None and self.log_probs is not None
+        n = self.actions.size(0)
+        # shuffle indices if shuffle is True
+        idx = torch.randperm(n, device=self.device) if shuffle else torch.arange(n, device=self.device)
+        for start in range(0, n, batch_size):
+            yield idx[start:start + batch_size] # returns a generator object that yields batches of indices
