@@ -54,7 +54,7 @@ and ring-size (≥5) masking.
 - Vectorised molecule environment (`VectorMoleculeEnv`) with correct terminal-SMILES capture.
 - RDKit multi-objective reward (QED + property-window MPO) **gated by a synthesizability auditor**.
 - GuacaMol/MOSES benchmark suite + annotated before/after molecule gallery.
-- Plain-text experiment logs in `experiments/` (GitHub-reviewable) and full W&B integration.
+- Plain-text training logs + top-k tables under `artifacts/<run>/` (GitHub-reviewable) and full W&B integration.
 - Comprehensive engineering reference (`STAGE1_MASTER_REFERENCE.md`) covering theory, formulas,
   pipeline, phase history, and a per-script analysis.
 
@@ -73,7 +73,7 @@ src/
     metrics.py       — validity / uniqueness / novelty / diversity / SA / FCD
   gallery.py         — annotated molecule grid (QED | SA | verdict) for before/after figures
   make_reference.py  — build a MOSES/ZINC/ChEMBL reference set (PyTDC) for novelty/FCD
-experiments/         — TXT run logs (tracked)
+artifacts/<run>/      — per-run outputs: TXT training log, top-k tables, checkpoints
 wandb/               — W&B local artifacts (ignored)
 ```
 
@@ -93,31 +93,47 @@ cd src
 # 0) sanity-check the synthesizability gate (known hacks fail, real drugs pass)
 python reward/synth_gate.py
 
-# 1) train (logs to W&B + experiments/; checkpoints + top-k to experiments/)
+# 1) train (run logs, checkpoints, and top-k are written to src/artifacts/<run>/)
 python train_rl.py
 
-# 2) benchmark a checkpoint's molecules (core metrics need no reference set)
-python eval/metrics.py --gen ../experiments/<run>/topk_final.txt
+# 2) benchmark the run's molecules (core metrics need no reference set)
+TOPK=$(find artifacts -name topk_final.txt | head -1)
+python eval/metrics.py --gen "$TOPK"
 
 # 3) render the annotated gallery (the before/after "money figure")
-python gallery.py --gen ../experiments/<run>/topk_final.txt --out ../results/gallery.png --title "Gated reward"
+#    note: gallery.py needs system X libs once: sudo apt-get install -y libxrender1 libxext6 libsm6
+python gallery.py --gen "$TOPK" --out ../results/gallery.png --title "Gated reward"
 
 # 4) (optional) add novelty + FCD against a drug-like reference set
+#    PyTDC pulls a heavy dependency tree — install it last / in a separate env so it can't downgrade rdkit
 python make_reference.py --out ../data/ref/moses.csv --n 30000 --name MOSES
-python eval/metrics.py --gen ../experiments/<run>/topk_final.txt --ref ../data/ref/moses.csv --device cuda
+python eval/metrics.py --gen "$TOPK" --ref ../data/ref/moses.csv --device cuda
 ```
 
 ## Results & honest framing
 
-With the full 119-action space, ring closures, and the QED→MPO curriculum, best archived reward rises
-into the ~10.8–11.3 band. Two caveats are reported openly rather than hidden:
+**Reference run `molrl_20260624_165347` (A10G, 800 updates).** The synthesizability gate did its
+job, and the benchmark harness exposed the baseline's real limitation — both reported openly.
 
-1. **Best ≠ policy.** The single best archived molecule is not the policy's typical output; mean
-   terminal reward, validity, and diversity are tracked alongside it.
-2. **The gate matters.** Pre-gate "elite" molecules were reward-hacks (`S#C` / `C#S#S#C`); post-gate,
-   such motifs are eliminated and `gen/sa_mean` falls toward the synthesizable range (~3).
+What worked:
+- **Validity 1.0** throughout (action masking is airtight).
+- **SA collapsed into synthesizable territory**: final `gen/sa_mean ≈ 3.8`, top-k `sa_mean 3.09`,
+  `sa_frac_le_4 = 1.0`, and **zero banned motifs** in the gallery — the `S#C` / `C#S#S#C`
+  reward-hacks of the pre-gate baseline are gone. Best molecule: `CCC(CN)C1CCCCCCCCC1` (a real,
+  synthesizable aminomethyl-cyclodecane).
 
-This is a **strong, modern RL baseline**, not a SOTA drug-discovery tool — by design.
+What the metrics exposed (the honest part):
+- **Mode collapse.** Final archive `uniqueness 0.02`, `internal_diversity 0.0`,
+  `scaffold_diversity 0.02`; in the late run `ppo/kl → 0.000` and `ppo/clip_frac → 0.000` (the
+  policy stopped changing for ~250 updates) and the best reward was frozen for ~365 updates.
+- **Best ≠ policy.** The archived best (9.39) is a lucky sample, ~15–20× the policy's mean reward;
+  mean/terminal reward, validity, and diversity are tracked alongside it rather than headlining
+  the single best.
+
+This is a **strong, modern RL baseline with a characterised failure mode** — not a SOTA
+drug-discovery tool. The collapse is the expected behaviour of single-objective on-policy RL on a
+sparse reward, and it is exactly what motivates the diversity/uncertainty pressure in Stage 2. See
+`STAGE1_MASTER_REFERENCE.md` §VI for the full run analysis.
 
 ## Roadmap (Stage 2+)
 

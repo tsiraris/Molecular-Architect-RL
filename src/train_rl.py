@@ -277,6 +277,8 @@ class TopK:
         # TopK Addition & Sorting: Insert new data, sort descending by reward, and enforce the capacity limit.
         if smiles is None:                                                                  # Check if the provided string is a null-type representing a fatal generation
             return                                                                          # Immediately exit the function without mutating the tracking list
+        if any(s == smiles for _, s in self.items):                                         # Skip exact duplicates
+           return
         self.items.append((float(reward), smiles))                                          # Append the newly discovered candidate as a tuple to the tracking list
         self.items.sort(key=lambda x: x[0], reverse=True)                                   # Sort the entire list in-place dynamically based on the reward scalar descending
         self.items = self.items[: self.k]                                                   # Truncate the list to strictly enforce the configured upper capacity bound
@@ -493,7 +495,7 @@ def train():
 
     out_dir = os.path.join("artifacts", run_name)                                           # Create an output directory for saving checkpoints and logs, organized under "artifacts" with a subdirectory named after the run.
     os.makedirs(out_dir, exist_ok=True)                                                     # Force create the directory structure ignoring any pre-existing warnings
-    logger = ResearchLogger({**CONFIG, "num_actions": num_actions, "input_feats": input_feats}, out_dir="experiments") # Spin up the local textual backup tracking engine
+    logger = ResearchLogger({**CONFIG, "num_actions": num_actions, "input_feats": input_feats}, out_dir=out_dir)    # Spin up the local textual backup tracking engine
 
     # -------------------------------------------------------------------------------------
     # Outer Update Loop
