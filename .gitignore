@@ -23,3 +23,11 @@ artifacts/
 
 # Archives
 *.zip
+
+# Temporary files
+*.tmp
+*.doc
+*.docx
+*.xml
+*.md
+!README.md
