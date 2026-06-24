@@ -6,3 +6,6 @@ wandb
 tqdm
 matplotlib
 pandas
+pillow
+fcd_torch
+PyTDC
