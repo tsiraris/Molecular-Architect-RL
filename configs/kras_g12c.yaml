@@ -1,0 +1,62 @@
+# ------------------------------------------------------------------------------------------------------------------
+# Target Definition
+# Defines the primary biological target for the Phase-2 pipeline (consumed by oracle/* and eval/validate_topk.py).
+# Specifically targets the Switch-II pocket around the mutated Cysteine 12 (Cys12). This setup reuses cleaned 
+# crystal structures previously prepared in PhysDock (e.g., 6OIM sotorasib, 6UT0 adagrasib, 5V9U, 5F2E).
+# ------------------------------------------------------------------------------------------------------------------
+target: KRAS_G12C                                                   # The unique identifier for the biological target, used by the pipeline to fetch correct structural files and routing paths.
+
+# ------------------------------------------------------------------------------------------------------------------
+# Receptor & Reference Ligand Paths
+# Pointers to the structural files generated during the PhysDock stage-01 cleaning process.
+# ------------------------------------------------------------------------------------------------------------------
+receptor_pdb:    ../data/kras/6oim_protein.pdb                      # Path to the raw, cleaned receptor structure in PDB format, explicitly stripped of original ligands and water molecules.
+receptor_pdbqt:  ../data/kras/6oim_receptor.pdbqt                   # Path to the Meeko-produced PDBQT receptor file, which includes Gasteiger charges and atom types required for docking.
+ref_ligand_sdf:  ../data/kras/6oim_ligand.sdf                       # Path to the native sotorasib ligand pose in SDF format, used to center the docking box and serve as a baseline for RMSD calculations.
+
+# ------------------------------------------------------------------------------------------------------------------
+# Pocket Definition
+# Defines the specific binding site geometry. Residues are 1-indexed. It is highly recommended to visually verify 
+# these exact indices against the loaded 6oim_protein.pdb structure in ChimeraX to ensure perfect alignment.
+# ------------------------------------------------------------------------------------------------------------------
+pocket_residues: [12, 68, 95, 96, 99, 102]                          # List of integer IDs defining the Switch-II / Cys12 local neighbourhood, guiding the agent's target-aware generation.
+
+# ------------------------------------------------------------------------------------------------------------------
+# Docking Box Parameters
+# Configures the spatial boundaries (search space) for the docking algorithm. 
+# The default creates a 22-Angstrom cubic bounding box centered on the crystal ligand's center of mass.
+# ------------------------------------------------------------------------------------------------------------------
+docking_box:                                                        # Defines the root configuration block for the 3D molecular docking bounding box.
+  center_from: ref_ligand                                           # Instructs the engine to dynamically calculate the center of mass (COM) from the 'ref_ligand_sdf' file (alternative: provide explicit [x,y,z] array).
+  center: null                                                      # Explicit coordinate override (currently null because 'center_from' automatically dynamically resolves the origin).
+  size_angstrom: [22, 22, 22]                                       # The [x, y, z] dimensions of the docking bounding box in Angstroms, providing ample search volume around the Switch-II pocket.
+
+# ------------------------------------------------------------------------------------------------------------------
+# ESM Pocket Embedding
+# Configures the Evolutionary Scale Modeling (ESM) protein language model to generate mathematical embeddings 
+# of the target pocket, conditioning the RL agent on the actual protein sequence context.
+# ------------------------------------------------------------------------------------------------------------------
+sequence_fasta:        ../data/kras/kras_g12c.fasta                 # Path to the FASTA file containing the full, 1-letter amino acid sequence of the target.
+esm_model:             esm2_t33_650M_UR50D                          # The specific Meta ESM-2 model variant to use (650M parameters; 'esm2_t30_150M_UR50D' is a lighter fallback).
+esm_pocket_embedding:  ../data/kras_g12c_pocket.npy                 # Destination path where pocket/encode_pocket.py writes the computed fixed-size numpy embedding vector of the pocket.
+
+# ------------------------------------------------------------------------------------------------------------------
+# Docking Engine Configuration
+# Sets the precise hyperparameters for the physics oracle (gnina) that acts as the target-aware reward function.
+# ------------------------------------------------------------------------------------------------------------------
+docking:                                                            # Defines the root configuration block for the scoring and pose-generation oracle.
+  engine: gnina                                                     # Specifies the backend software (options: gnina, smina, vina). 'gnina' utilizes GPU-accelerated Convolutional Neural Network (CNN) rescoring.
+  cnn_scoring: rescore                                              # Gnina mode: 'rescore' is fast and evaluates traditional poses; 'refine' applies CNN gradients to optimize poses (slower but yields better geometries).
+  exhaustiveness: 8                                                 # The global search rigor. Higher values explore more thoroughly but exponentially increase Oracle wall-clock time per RL step.
+  num_modes: 3                                                      # The maximum number of distinct binding poses (conformations) to output and score for each generated molecule.
+  gpu: true                                                         # Flag to force hardware-accelerated processing for the CNN scoring phase to prevent massive RL training bottlenecks.
+
+# ------------------------------------------------------------------------------------------------------------------
+# Applicability Domain & Covalent Caveat
+# Crucial scientific disclaimer dictating how the results of this Phase-2 pipeline must be interpreted and reported
+# in every claim or figure generated from this data.
+# ------------------------------------------------------------------------------------------------------------------
+covalent_note: >                                                    # Multi-line string block declaring the fundamental biochemical constraints of the current in-silico simulation.
+  KRAS G12C inhibitors bind covalently to Cys12. gnina/Vina dock non-covalently, so the docking
+  score is a RELATIVE ranking proxy, never an absolute dG. Validate top-k with Boltz-2 + OpenMM,
+  and never report absolute binding free energies.

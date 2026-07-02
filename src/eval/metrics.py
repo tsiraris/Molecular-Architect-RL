@@ -104,7 +104,7 @@ def read_smiles(path):
     return smis                                                                             # Return the accumulated list of SMILES strings
 
 
-# ------------------------------------------------------------ metrics ---------
+# ------------------------------------------------ Μetrics -----------------------------------------------------------
 def _mols(smis):
     """
     Converts a list of SMILES strings into RDKit Mol objects.

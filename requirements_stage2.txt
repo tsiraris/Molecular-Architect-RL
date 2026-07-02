@@ -1,0 +1,21 @@
+# Stage-2 (target-aware, frontier) requirements — on top of the Stage-1 stack
+# Stage-1 already provides: torch, torch_geometric, rdkit, numpy, pandas, tqdm, wandb, pillow
+
+# --- core (surrogate on ChEMBL + RL affinity reward) ---
+requests            # ChEMBL REST pull (data/fetch_chembl_kras.py)
+pyyaml              # target config (configs/kras_g12c.yaml)
+matplotlib          # surrogate calibration plot
+scikit-learn        # convenience metrics (Spearman is also implemented without scipy)
+scipy               # optional analysis
+
+# --- docking oracle (real, primary; installed via setup_docking.sh) ---
+meeko>=0.6,<0.7     # receptor/ligand prep (PDBQT)
+vina                # AutoDock Vina python bindings (CPU fallback engine)
+# gnina + smina are static BINARIES installed by setup_docking.sh (not pip)
+
+# --- pose validity + pocket encoding (real, primary) ---
+posebusters         # % physically-valid docked poses
+fair-esm            # ESM-2 pocket embeddings for FiLM conditioning (you already use this in PhageForge)
+
+# Boltz-2 + OpenMM are NOT installed here — they run in your existing PhysDock conda env,
+# called via oracle/physdock_bridge.py (subprocess), exactly as PhysDock already does.

@@ -27,6 +27,7 @@ import torch
 from rdkit import Chem
 from rdkit.Chem import Crippen, Descriptors, GraphDescriptors, Lipinski, QED, rdMolDescriptors
 from reward.synth_gate import synth_gate, BANNED_PENALTY   # Stage-1 synthesizability gate
+from reward.composite import combine as _combine_reward, default_reward_cfg as _default_reward_cfg  # Stage-2 affinity+diversity combiner
 
 # -----------------------------------------------------------------------------------------
 # Global Structural Alerts
@@ -293,7 +294,8 @@ class MoleculeEnvironment:
         >>> len(obs)
         4
     """
-    def __init__(self, device: torch.device, max_steps: int = 40, action_spec: Optional[ActionSpec] = None, min_atoms: int = 5):
+    def __init__(self, device: torch.device, max_steps: int = 40, action_spec: Optional[ActionSpec] = None, min_atoms: int = 5,
+                 affinity_scorer=None, diversity_archive=None, reward_cfg: Optional[dict] = None):
         """
         Initializes the molecular environment configuration.
         
@@ -317,6 +319,14 @@ class MoleculeEnvironment:
         self.device = device                                                                # Store the torch device for tensor allocations
         self.max_steps = max_steps                                                          # Store the maximum allowed steps per episode
         self.min_atoms = min_atoms                                                          # Store the minimum threshold of atoms required before stopping is rewarded
+        # --- Stage-2 (optional): target-aware affinity + diversity reward components ---
+        # Loads a pre-trained affinity scorer (surrogate/predict.py) and diversity archive (reward/composite.py) objects, if provided
+        self.affinity_scorer = affinity_scorer                                              # AffinityScorer or None; queried at terminal when reward_cfg["use_affinity"] is True
+        self.diversity_archive = diversity_archive                                          # DiversityArchive or None; supplies the anti-collapse Tanimoto penalty
+        # reward_cfg provides the default hyperparameter configuration for the Stage-2 reward system (reward/composite.py), 
+        # if not provided in the constructor the default values are explicitly tuned to exactly reproduce the Stage-1 behavior (affinity and diversity turned off).
+        self.reward_cfg = reward_cfg if reward_cfg is not None else _default_reward_cfg()   # Stage-2 weights; defaults reproduce Stage-1 exactly
+        self.last_reward_info = {}                                                          # Diagnostics from the most recent terminal reward (for logging)
         self.current_step = 0                                                               # Initialize the internal episode step counter to zero
         self.current_mol: Optional[Chem.RWMol] = None                                       # Current_mol can either be an RDKit RWMol object representing the current molecule or None if the environment has not been initialized.
         self.focus_node_idx: int = 0                                                        # Initialize the focal attachment pointer to atom index 0
@@ -614,8 +624,10 @@ class MoleculeEnvironment:
         # Pull the pure topological graph to evaluate synthetic realism.
         mol = self.current_mol.GetMol()                                                     # Extract the standard RDKit Mol object from the read-write instance
 
-        # Synthesizability Gate: Prevent 2D descriptor hacking by checking for fundamentally unstable chemistry.
+        # Synthesizability Gate: Prevent 2D descriptor hacking by checking for fundamentally unstable chemistry (such as banned motifs, or SA>6, or PAINS).
         hard_ok, soft, _ginfo = synth_gate(mol)                                             # Pass the molecule through the external rule-based synthesizer filter
+        # Soft-scale Realism Application: Apply soft as the final fractional modifier to penalize difficult but valid synthesis.
+        # Reminder: soft is a Linearly decay reward for moderate complexity, exponentially decay for toxic alerts from PAINS and BRENK catalogues. It is a float in [0, 1] where 1 means fully valid and 0 means banned.
         if not hard_ok:                                                                     # Evaluate the hard pass/fail boolean flag returned by the gate
             return BANNED_PENALTY                                                           # Immediately yield bounded penalty for banned-motif or SA>6 junk chemistry
 
@@ -626,11 +638,28 @@ class MoleculeEnvironment:
         elif curriculum_ratio >= 1.0:                                                       # Check if the training curriculum has fully matured
             base = r                                                                        # Establish base reward strictly as the finalized full MPO calculation
         else:                                                                               # Handle the intermediate transitional phase of the curriculum
-            # Linearly interpolate between the pure QED score and the full MPO objective
+            # Linearly interpolate between the pure QED score and the full MPO objective (r)
             base = (1.0 - curriculum_ratio) * (10.0 * self._safe_qed()) + curriculum_ratio * r 
-        # Soft-scale Realism Application: Apply the final fractional modifier to penalize difficult but valid synthesis.
-        # Reminder: soft is a Linearly decay reward for moderate complexity, exponentially decay for toxic alerts from PAINS and BRENK catalogues. It is a float in [0, 1] where 1 means fully valid and 0 means banned.
-        return base * soft                                                                  # Return the blended curriculum reward proportionally scaled by the soft realism multiplier
+        # Stage-2 composite: fold in an optional affinity term (with uncertainty penalty) and a diversity
+        # penalty. With use_affinity/use_diversity False (the defaults), this returns exactly base * soft.
+        aff_hat_z = aff_unc_z = None
+        # If the affinity surrogate is available ("use_affinity" = True), score the molecule 
+        # (surrogate/predict.py: aff_hat_z = mean affinity and aff_unc_z = std z-scored pChEMBL from the deep ensemble)
+        if self.reward_cfg.get("use_affinity") and self.affinity_scorer is not None:         # Only score when affinity is enabled and a surrogate is attached
+            aff_hat_z, aff_unc_z = self.affinity_scorer.score(mol)                           # (mean, std) predicted z-scored pChEMBL from the deep ensemble
+        diversity_pen = 0.0
+        # If the diversity archive is available ("use_diversity" = True), returns a penalty for being similar to recently generated molecules 
+        # Reminder: reward/composite.py/def penalty calculates the average Tanimoto similarity between the molecule and
+        # the entire current rolling archive (fingerprints of all the generated molecules in this queue). 
+        if self.reward_cfg.get("use_diversity") and self.diversity_archive is not None:      # Anti mode-collapse: penalise similarity to recently generated molecules
+            diversity_pen = self.diversity_archive.penalty(mol)                              # Mean Tanimoto to the rolling archive (0 novel .. 1 duplicate)
+            # Add the current molecule's fingerprint to the archive
+            self.diversity_archive.add(mol)                                                  # Register this molecule so future ones are compared against it
+        # Final Stage-2 composite reward and info dict (P, A, D, aff_hat_z, aff_unc_z)
+        reward, info = _combine_reward(base, soft, curriculum_ratio, self.reward_cfg,        # Weighted gate x property x affinity(-beta*unc) x diversity combiner
+                                       aff_hat_z=aff_hat_z, aff_unc_z=aff_unc_z, diversity_pen=diversity_pen)
+        self.last_reward_info = info                                                         # Stash diagnostics (P, A, D, aff_hat_z, aff_unc_z) for the trainer to log
+        return reward                                                                        # Return the Stage-2 composite terminal reward (== base*soft when affinity/diversity off)
 
     def _safe_qed(self) -> float:
         """
