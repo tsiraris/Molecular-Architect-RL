@@ -1,5 +1,7 @@
 """
-Molecular Architect RL: Vectorized Environment Wrapper.
+===============================
+Vectorized Environment Wrapper
+===============================
 
 This script defines the `VectorMoleculeEnv` class, a crucial infrastructure component 
 for reinforcement learning (specifically PPO). Deep RL algorithms require massive 
@@ -14,6 +16,7 @@ the resulting graph observations, rewards, and done flags, and batches them toge
 Crucially, it implements an "auto-reset" mechanism: if an individual episode terminates, 
 it automatically resets that specific environment and swaps in the new initial state, 
 ensuring a continuous, uninterrupted flow of batched data for the learning algorithm.
+**Note: Sub-environments refer to the parallel instances of the `MoleculeEnvironment` class.
 """
 
 from __future__ import annotations
@@ -45,15 +48,43 @@ class VectorMoleculeEnv:
         >>> len(obs_list)
         4
     """
-    def __init__(self, num_envs: int, device: torch.device, action_spec: ActionSpec | None = None):
+    def __init__(self, num_envs: int, device: torch.device, action_spec: ActionSpec | None = None,
+                 affinity_scorer=None, diversity_archive=None, reward_cfg: dict | None = None):
         # -----------------------------------------------------------------------------------------
         # Initialization and Instantiation
         # Store configuration and spawn the requested number of independent environments.
         # -----------------------------------------------------------------------------------------
         self.num_envs = num_envs                                                                    # Store the total number of parallel environments to maintain
         self.device = device                                                                        # Store the compute device for allocating observation tensors
-        self.envs = [MoleculeEnvironment(device, action_spec=action_spec) for _ in range(num_envs)] # List[MoleculeEnvironment]
+        # Stage-2 introduces a single shared diversity archive across all envs (so the Tanimoto penalty sees 
+        # the whole batch's recent output), and the same surrogate/reward-config handed to every environment.
+        self.envs = [MoleculeEnvironment(device, action_spec=action_spec,
+                                         affinity_scorer=affinity_scorer,
+                                         diversity_archive=diversity_archive,
+                                         reward_cfg=reward_cfg) for _ in range(num_envs)]           # List[MoleculeEnvironment]
         self.num_actions = self.envs[0].num_actions                                                 # Extract the scalar action space size from the first environment to expose globally
+
+    def last_reward_infos(self) -> list:
+        """
+        Extracts the most recent terminal-reward diagnostics (P, A, D, aff_hat_z,
+        aff_unc_z) from each sub-env, returning empty dicts before any episode terminates.
+        
+        Designed to be nested inside a vectorized environment class. It iterates over 
+        internal sub-environments and extracts their stored diagnostic tracking dictionary.
+        
+        Args:
+            self: The class instance (Vector Environment).
+            
+        Returns:
+            list: A list of diagnostic dictionaries, one for each sub-environment.
+            
+        Example:
+            >>> # Assuming `self.envs` contains environments with `last_reward_info = {"QED": 0.5}`
+            >>> self.last_reward_infos()
+            [{"QED": 0.5}, {"QED": 0.5}]
+        """
+        # Extract the last reward info from each sub-environment
+        return [getattr(e, "last_reward_info", {}) for e in self.envs]
 
     def reset(self) -> List[Data]:
         """

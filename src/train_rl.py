@@ -14,6 +14,12 @@ Automatic Mixed Precision (AMP) for GPU acceleration, and a dynamic linear curri
 that transitions the reward landscape from simple heuristics (QED) to a stringent 
 Multi-Parameter Objective (MPO). Extensive logging (WandB and text files) tracks 
 structural diversity, property distributions, and best-found molecules.
+
+Stage-2 (Target-Aware) Upgrades:
+This updated loop includes conditional wiring for the Stage-2 target-aware design phase. 
+It can integrate a pre-trained `AffinityScorer` deep ensemble surrogate, a `DiversityArchive` 
+to penalize mode collapse via rolling Tanimoto checks, FiLM-based protein pocket conditioning 
+via pre-computed embeddings, and real-time Synthetic Accessibility (SA) score tracking.
 """
 
 from __future__ import annotations
@@ -61,7 +67,7 @@ CONFIG = {                                                                      
     "ppo_epochs": 10,                                                                       # Set the number of times the network iterates over the collected buffer data
     "buffer_size": 2048,                                                                    # Set total transitions per update (across envs) to gather before updating
     "num_envs": 8,                                                                          # Set the number of parallel vectorized environments to run concurrently
-    "updates": 800,                                                                         # Set the total number of data collection and PPO update cycles to execute
+    "updates": 500,                                                                         # Set the total number of data collection and PPO update cycles to execute
     # Model parameters
     "hidden_dim": 128,                                                                      # Set the dimensionality of the hidden feature vectors in the GNN layers
     "edge_dim": 4,                                                                          # Set the dimensionality of the one-hot encoded bond type edge features
@@ -79,7 +85,28 @@ CONFIG = {                                                                      
     "project": "molecular-rl-2026",                                                         # Set the Weights & Biases project name to organize remote tracking dashboards
     "run_name": None,                                                                       # Initialize the specific run identifier, allowing auto-generation if None
     "seed": 42,                                                                             # Set the master random seed ensuring deterministic, reproducible initializations
-}                                                                                           # Close the hyperparameter configuration dictionary
+    # --------------------------------------------------------------------------------------------------------------
+    # Stage-2 Configuration (Target-aware knobs). 
+    # Defaults below reproduce the Stage-1 run exactly (affinity and diversity off). 
+    # Flip use_affinity/use_diversity on for the Stage-2 experiment.
+    # --------------------------------------------------------------------------------------------------------------
+"use_affinity": False,                                                                      # Add the learned-surrogate affinity term to the terminal reward
+    "surrogate_dir": "../artifacts/surrogate_kras",                                         # Directory holding the trained deep ensemble + norm.json
+    "w_property": 1.0,                                                                      # Weight on the 2D property term P (kept as a low prior when affinity is on)
+    "w_affinity": 1.0,                                                                      # Weight on the affinity term A (ramped by the curriculum_ratio)
+    "beta_uncertainty": 0.5,                                                                # Penalty coefficient on ensemble uncertainty (anti proxy-hacking)
+    "reward_scale": 12.0,                                                                   # Overall scale so reward magnitude matches Stage-1 (base ceiling was ~12)
+    # Add the Tanimoto-to-archive diversity penalty (anti mode-collapse)
+    "use_diversity": False,                                                                  
+    # Weight on the diversity penalty D (~0.5–1.0 to fight collapse)
+    "w_diversity": 0.0,                                                                      
+    # Rolling window of recent molecules used for the diversity penalty
+    "diversity_archive_size": 256,                                                           
+    # Enable pocket-FiLM conditioning of the policy (single-target KRAS)
+    "use_pocket": False,                                                                    
+    # Path to the pocket embedding produced by pocket/encode_pocket.py
+    "pocket_npy": "../data/kras_g12c_pocket.npy",                                           
+}                                                                                           
 
 def set_seed(seed: int) -> None:
     """
@@ -481,9 +508,49 @@ def train():
         config={**CONFIG, "num_actions": num_actions, "input_feats": input_feats},          # Upload the complete dictionary of hyperparameters and network dims to WandB
     )                                                                                       # Close the WandB initialization call
 
-    env = VectorMoleculeEnv(CONFIG["num_envs"], device, action_spec=spec)                   # Initialize a vectorized environment for molecular generation (parallel simulation of multiple environments/molecules simultaneously).
-    agent = MoleculeAgent(input_feats, num_actions, hidden_dim=CONFIG["hidden_dim"], edge_dim=CONFIG["edge_dim"]).to(device) # Initialize the actor-critic neural network and dispatch its weights to compute memory
+    # ----------------------------------------------------------------------------------------------------
+    # Stage-2 Setup (Affinity, Diversity, FiLM Pocket Conditioning - All Optional) 
+    # **Reminder: With the default CONFIG these are all no-ops (identical to the Stage-1 run).
+    # ---------------------------------------------------------------------------------------------------
+    
+    # If enabled, build the affinity scorer and diversity archive
+    affinity_scorer = None                                                                          # Initialize the proxy scorer placeholder to None by default
+    if CONFIG["use_affinity"]:                                                                      # Check if the Stage-2 target-aware surrogate scoring flag is active
+        from surrogate.predict import AffinityScorer                                                # Imported lazily so Stage-1 runs need no surrogate present
+        affinity_scorer = AffinityScorer(CONFIG["surrogate_dir"], device=str(device))               # Load the trained deep ensemble + label-normalisation stats once
+        print(f"[stage2] affinity surrogate loaded from {CONFIG['surrogate_dir']}")                 # Echo the successful surrogate mounting to the terminal
+    
+    diversity_archive = None                                                                        # Initialize the Tanimoto archive placeholder to None by default
+    if CONFIG["use_diversity"]:                                                                     # Check if the Stage-2 rolling diversity penalty flag is active
+        from reward.composite import DiversityArchive                                               # Shared rolling Tanimoto archive across all envs
+        diversity_archive = DiversityArchive(maxlen=CONFIG["diversity_archive_size"])               # Instantiate the rolling buffer to track recently generated scaffolds
+        print(f"[stage2] diversity penalty ON (archive={CONFIG['diversity_archive_size']}, w={CONFIG['w_diversity']})") # Echo the diversity penalty activation to the terminal
+    
+    # Assemble the reward-config dictionary for the env's composite combiner reads
+    reward_cfg = {                                                                                  # Mirror of composite.default_reward_cfg(), populated from CONFIG
+        "use_affinity": CONFIG["use_affinity"], "use_diversity": CONFIG["use_diversity"],           # Pass operational boolean flags down to the composite reward engine
+        "w_property": CONFIG["w_property"], "w_affinity": CONFIG["w_affinity"],                     # Pass numerical scalar weights defining the linear objective combination
+        "w_diversity": CONFIG["w_diversity"], "beta_uncertainty": CONFIG["beta_uncertainty"],       # Pass penalty coefficients for mode collapse and epistemic uncertainty
+        "reward_scale": CONFIG["reward_scale"], "property_ceiling": 12.0,                           # Pass final multiplication scalars to match gradient magnitudes
+    }                                                                                               # Close the reward configuration dictionary
 
+    env = VectorMoleculeEnv(CONFIG["num_envs"], device, action_spec=spec,
+                            affinity_scorer=affinity_scorer, diversity_archive=diversity_archive,
+                            reward_cfg=reward_cfg)                                                  # Initialize a vectorized environment for molecular generation (parallel simulation of multiple environments/molecules simultaneously).
+    
+    # Also if enabled, load the pocket embedding
+    pocket_dim = 0                                                                                  # Initialize the target pocket dimensionality fallback counter to zero
+    pocket_vec = None                                                                               # Initialize the FiLM modulation vector placeholder to None by default
+    if CONFIG["use_pocket"]:                                                                        # Check if the structural pocket conditioning flag is active
+        import numpy as _np                                                                         # Import numpy strictly for loading the localized pre-computed embeddings
+        pocket_vec = _np.load(CONFIG["pocket_npy"])                                                 # 1-D pocket embedding (ESM or deterministic fallback)
+        pocket_dim = int(pocket_vec.shape[0])                                                       # Extract the exact feature length of the loaded pocket embedding vector
+        print(f"[stage2] pocket conditioning ON (dim={pocket_dim}) from {CONFIG['pocket_npy']}")    # Echo the pocket FiLM network activation to the terminal
+    
+    agent = MoleculeAgent(input_feats, num_actions, hidden_dim=CONFIG["hidden_dim"], edge_dim=CONFIG["edge_dim"], pocket_dim=pocket_dim).to(device) # Initialize the actor-critic neural network and dispatch its weights to compute memory
+    if pocket_vec is not None:                                                                      # Verify if a valid pocket embedding was successfully extracted
+        agent.set_pocket(pocket_vec)                                                                # Install the fixed single-target pocket vector used by FiLM
+    
     optimizer = optim.AdamW(agent.parameters(), lr=CONFIG["lr"])                            # Attach the AdamW gradient optimization algorithm to update the agent's tensor weights
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))                          # Initialize the gradient scaling engine to enable safe fp16 mixed precision
     buffer = PPOBuffer(device, num_envs=CONFIG["num_envs"], gamma=CONFIG["gamma"], gae_lambda=CONFIG["gae_lambda"]) # Allocate the monolithic memory buffer to store trajectory rollouts
@@ -493,7 +560,7 @@ def train():
 
     out_dir = os.path.join("artifacts", run_name)                                           # Create an output directory for saving checkpoints and logs, organized under "artifacts" with a subdirectory named after the run.
     os.makedirs(out_dir, exist_ok=True)                                                     # Force create the directory structure ignoring any pre-existing warnings
-    logger = ResearchLogger({**CONFIG, "num_actions": num_actions, "input_feats": input_feats}, out_dir="experiments") # Spin up the local textual backup tracking engine
+    logger = ResearchLogger({**CONFIG, "num_actions": num_actions, "input_feats": input_feats}, out_dir=out_dir)    # Spin up the local textual backup tracking engine
 
     # -------------------------------------------------------------------------------------
     # Outer Update Loop
@@ -688,6 +755,19 @@ def train():
                 ev = 1.0 - torch.var(y_true - y_pred) / (torch.var(y_true) + 1e-8)          # Mathematically solve the standard Explained Variance fraction
                 ev = float(ev.item())                                                       # Extract safely to python primitive
 
+            # Stage-2 Reward Diagnostics
+            # Extract the info dictionaries (P, A, D, aff_hat_z, aff_unc_z) from each sub-environment (empty if the episode has not terminated yet).
+            _infos = [i for i in env.last_reward_infos() if i]                                      # Extract the cache of info dictionaries spanning the most recent episodic terminations
+            # Local helper function that safely computes means for a specific dictionary key (could be any from "P" to "aff_unc_z"). 
+            # Fallback safely to a mathematical NaN if the key is not present.
+            def _meankey(k):                                                                        # Define a local helper function to safely compute means for specific reward components
+                vals = [i[k] for i in _infos if i.get(k) is not None]                               # Extract valid numerical values for the requested tracking key from all info dicts
+                return float(np.mean(vals)) if vals else float("nan")                               # Compute the arithmetic mean or fallback safely to a mathematical NaN
+            # Compute the mean values for the "A", "D", "aff_hat_z", and "aff_unc_z" keys 
+            # from the most recent reward diagnostics from the info dictionaries.
+            s2_aff_hat = _meankey("aff_hat_z"); s2_aff_unc = _meankey("aff_unc_z")                  # Compute means for the z-scored affinity predictions and surrogate ensemble uncertainties
+            s2_aff_term = _meankey("A"); s2_div_pen = _meankey("D")                                 # Compute means for the final weighted affinity term and the diversity penalty term
+            
             wandb.log(                                                                      # Package data and emit remote network POST over to Weights & Biases
                 {                                                                           # Begin payload dict
                     "update": update,                                                       # Log master iteration loop
@@ -707,7 +787,11 @@ def train():
                     "ppo/loss": float(np.mean(losses)) if losses else 0.0,                  # Log combined neural cost function
                     "critic/explained_var": ev,                                             # Log algorithmic prediction accuracy
                     "best/reward": best_r,                                                  # Log absolute theoretical best find
-                }                                                                           # Close payload dict
+                    "affinity/pred_z_mean": s2_aff_hat,                                     # Stage-2: mean predicted z-scored pChEMBL of terminated molecules (NaN if affinity off)
+                    "affinity/uncertainty_mean": s2_aff_unc,                                # Stage-2: mean ensemble uncertainty (epistemic) of terminated molecules
+                    "affinity/term_mean": s2_aff_term,                                      # Stage-2: mean affinity reward term A after the uncertainty penalty
+                    "diversity/penalty_mean": s2_div_pen,                                   # Stage-2: mean Tanimoto-to-archive penalty D (0 novel .. 1 duplicate)
+                }                                                                           
             )                                                                               # Terminate WandB POST operation
             
             # Duplicate all metrics to the physical local textual file logger

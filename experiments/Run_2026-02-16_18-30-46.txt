@@ -1,4 +1,4 @@
-MOLECULAR RL SOTA LOG
+MOLECULAR RL LOG
 ==================================================
 lr: 0.0003
 gamma: 0.99

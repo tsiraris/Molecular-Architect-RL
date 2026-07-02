@@ -1,0 +1,195 @@
+nohup: ignoring input
+wandb: Tracking run with wandb version 0.28.0
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in /home/sagemaker-user/Molecular-Architect-RL/src/wandb/offline-run-20260624_165347-jsy947zl
+wandb: View this run in the terminal with `wandb leet`
+[0000] R=-0.092 (std=0.474)  valid=1.000  uniq=0.625  div=0.773  kl=0.0054  clip=0.081  ev=-0.001  ent=0.080  curr=0.000  best=4.777  O=c1nc(F)nc[nH]1
+[0005] R=-0.001 (std=0.482)  valid=1.000  uniq=1.000  div=0.942  kl=0.0128  clip=0.148  ev=-0.002  ent=0.080  curr=0.000  best=6.174  CCNCC(Cl)=CCO
+[0010] R=0.254 (std=0.881)  valid=1.000  uniq=1.000  div=0.943  kl=0.0155  clip=0.270  ev=0.000  ent=0.080  curr=0.000  best=6.174  CCNCC(Cl)=CCO
+[0015] R=0.608 (std=1.498)  valid=1.000  uniq=0.875  div=0.823  kl=0.0132  clip=0.095  ev=-0.025  ent=0.080  curr=0.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0020] R=0.793 (std=1.723)  valid=1.000  uniq=1.000  div=0.853  kl=0.0112  clip=0.116  ev=-0.035  ent=0.080  curr=0.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0025] R=0.843 (std=1.771)  valid=1.000  uniq=0.750  div=0.816  kl=0.0147  clip=0.081  ev=-0.087  ent=0.080  curr=0.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0030] R=0.688 (std=1.654)  valid=1.000  uniq=0.875  div=0.915  kl=0.0150  clip=0.113  ev=0.166  ent=0.079  curr=0.018  best=6.474  CC=C(F)CCNC(=O)CCO
+[0035] R=0.854 (std=1.783)  valid=1.000  uniq=0.750  div=0.756  kl=0.0174  clip=0.157  ev=0.031  ent=0.077  curr=0.036  best=6.474  CC=C(F)CCNC(=O)CCO
+[0040] R=0.927 (std=1.848)  valid=1.000  uniq=0.625  div=0.790  kl=0.0135  clip=0.100  ev=-0.027  ent=0.076  curr=0.055  best=6.474  CC=C(F)CCNC(=O)CCO
+[0045] R=0.910 (std=1.822)  valid=1.000  uniq=0.750  div=0.781  kl=0.0191  clip=0.133  ev=-0.346  ent=0.075  curr=0.073  best=6.474  CC=C(F)CCNC(=O)CCO
+[0050] R=0.795 (std=1.720)  valid=1.000  uniq=0.750  div=0.835  kl=0.0154  clip=0.086  ev=0.002  ent=0.074  curr=0.091  best=6.474  CC=C(F)CCNC(=O)CCO
+[0055] R=0.744 (std=1.694)  valid=1.000  uniq=0.625  div=0.714  kl=0.0259  clip=0.137  ev=-0.001  ent=0.072  curr=0.109  best=6.474  CC=C(F)CCNC(=O)CCO
+[0060] R=0.796 (std=1.720)  valid=1.000  uniq=0.250  div=0.223  kl=0.0126  clip=0.073  ev=-0.225  ent=0.071  curr=0.127  best=6.474  CC=C(F)CCNC(=O)CCO
+[0065] R=0.787 (std=1.696)  valid=1.000  uniq=0.375  div=0.567  kl=0.0158  clip=0.131  ev=0.022  ent=0.070  curr=0.145  best=6.474  CC=C(F)CCNC(=O)CCO
+[0070] R=0.787 (std=1.684)  valid=1.000  uniq=0.625  div=0.581  kl=0.0152  clip=0.094  ev=-0.331  ent=0.069  curr=0.164  best=6.474  CC=C(F)CCNC(=O)CCO
+[0075] R=0.768 (std=1.651)  valid=1.000  uniq=0.875  div=0.805  kl=0.0146  clip=0.069  ev=-0.073  ent=0.067  curr=0.182  best=6.474  CC=C(F)CCNC(=O)CCO
+[0080] R=0.765 (std=1.629)  valid=1.000  uniq=0.750  div=0.815  kl=0.0213  clip=0.188  ev=-0.070  ent=0.066  curr=0.200  best=6.474  CC=C(F)CCNC(=O)CCO
+[0085] R=0.741 (std=1.611)  valid=1.000  uniq=0.625  div=0.756  kl=0.0276  clip=0.143  ev=0.005  ent=0.065  curr=0.218  best=6.474  CC=C(F)CCNC(=O)CCO
+[0090] R=0.758 (std=1.601)  valid=1.000  uniq=0.625  div=0.783  kl=0.0214  clip=0.187  ev=0.009  ent=0.063  curr=0.236  best=6.474  CC=C(F)CCNC(=O)CCO
+[0095] R=0.881 (std=1.676)  valid=1.000  uniq=0.625  div=0.663  kl=0.0099  clip=0.024  ev=-0.082  ent=0.062  curr=0.255  best=6.474  CC=C(F)CCNC(=O)CCO
+[0100] R=0.574 (std=1.379)  valid=1.000  uniq=0.750  div=0.807  kl=0.0273  clip=0.121  ev=0.063  ent=0.061  curr=0.273  best=6.474  CC=C(F)CCNC(=O)CCO
+[0105] R=0.442 (std=1.234)  valid=1.000  uniq=1.000  div=0.962  kl=0.0254  clip=0.152  ev=0.010  ent=0.060  curr=0.291  best=6.474  CC=C(F)CCNC(=O)CCO
+[0110] R=0.561 (std=1.277)  valid=1.000  uniq=0.500  div=0.621  kl=0.0410  clip=0.213  ev=-0.035  ent=0.058  curr=0.309  best=6.474  CC=C(F)CCNC(=O)CCO
+[0115] R=0.819 (std=1.567)  valid=1.000  uniq=0.625  div=0.745  kl=0.0156  clip=0.035  ev=-0.161  ent=0.057  curr=0.327  best=6.474  CC=C(F)CCNC(=O)CCO
+[0120] R=0.597 (std=1.250)  valid=1.000  uniq=0.750  div=0.799  kl=0.0170  clip=0.274  ev=-0.140  ent=0.056  curr=0.345  best=6.474  CC=C(F)CCNC(=O)CCO
+[0125] R=0.676 (std=1.372)  valid=1.000  uniq=0.625  div=0.786  kl=0.0204  clip=0.129  ev=-0.439  ent=0.055  curr=0.364  best=6.474  CC=C(F)CCNC(=O)CCO
+[0130] R=0.674 (std=1.419)  valid=1.000  uniq=0.625  div=0.795  kl=0.0175  clip=0.092  ev=-1.377  ent=0.053  curr=0.382  best=6.474  CC=C(F)CCNC(=O)CCO
+[0135] R=0.693 (std=1.414)  valid=1.000  uniq=0.875  div=0.805  kl=0.0192  clip=0.139  ev=-0.058  ent=0.052  curr=0.400  best=6.474  CC=C(F)CCNC(=O)CCO
+[0140] R=0.771 (std=1.459)  valid=1.000  uniq=0.500  div=0.764  kl=0.0176  clip=0.018  ev=-0.004  ent=0.051  curr=0.418  best=6.474  CC=C(F)CCNC(=O)CCO
+[0145] R=0.737 (std=1.419)  valid=1.000  uniq=0.625  div=0.613  kl=0.0182  clip=0.035  ev=-0.690  ent=0.049  curr=0.436  best=6.474  CC=C(F)CCNC(=O)CCO
+[0150] R=0.732 (std=1.400)  valid=1.000  uniq=0.500  div=0.592  kl=0.0334  clip=0.029  ev=-0.106  ent=0.048  curr=0.455  best=6.474  CC=C(F)CCNC(=O)CCO
+[0155] R=0.705 (std=1.361)  valid=1.000  uniq=0.750  div=0.790  kl=0.0507  clip=0.070  ev=-0.692  ent=0.047  curr=0.473  best=6.474  CC=C(F)CCNC(=O)CCO
+[0160] R=0.714 (std=1.354)  valid=1.000  uniq=0.625  div=0.801  kl=0.0080  clip=0.052  ev=-0.111  ent=0.046  curr=0.491  best=6.474  CC=C(F)CCNC(=O)CCO
+[0165] R=0.717 (std=1.338)  valid=1.000  uniq=0.500  div=0.638  kl=0.0130  clip=0.074  ev=0.090  ent=0.044  curr=0.509  best=6.474  CC=C(F)CCNC(=O)CCO
+[0170] R=0.685 (std=1.304)  valid=1.000  uniq=0.500  div=0.729  kl=0.0166  clip=0.041  ev=0.088  ent=0.043  curr=0.527  best=6.474  CC=C(F)CCNC(=O)CCO
+[0175] R=0.496 (std=1.147)  valid=1.000  uniq=0.625  div=0.706  kl=0.0270  clip=0.111  ev=0.022  ent=0.042  curr=0.545  best=6.474  CC=C(F)CCNC(=O)CCO
+[0180] R=0.679 (std=1.267)  valid=1.000  uniq=0.500  div=0.688  kl=0.0199  clip=0.014  ev=-0.754  ent=0.041  curr=0.564  best=6.474  CC=C(F)CCNC(=O)CCO
+[0185] R=0.559 (std=1.165)  valid=1.000  uniq=0.500  div=0.552  kl=0.0156  clip=0.132  ev=0.154  ent=0.039  curr=0.582  best=6.474  CC=C(F)CCNC(=O)CCO
+[0190] R=0.632 (std=1.203)  valid=1.000  uniq=0.500  div=0.586  kl=0.0158  clip=0.045  ev=-0.199  ent=0.038  curr=0.600  best=6.474  CC=C(F)CCNC(=O)CCO
+[0195] R=0.540 (std=1.118)  valid=1.000  uniq=0.625  div=0.591  kl=0.0573  clip=0.143  ev=-0.405  ent=0.037  curr=0.618  best=6.474  CC=C(F)CCNC(=O)CCO
+[0200] R=0.621 (std=1.163)  valid=1.000  uniq=0.625  div=0.735  kl=0.0129  clip=0.037  ev=-0.220  ent=0.035  curr=0.636  best=6.474  CC=C(F)CCNC(=O)CCO
+[0205] R=0.599 (std=1.133)  valid=1.000  uniq=0.500  div=0.592  kl=0.0902  clip=0.053  ev=-0.382  ent=0.034  curr=0.655  best=6.474  CC=C(F)CCNC(=O)CCO
+[0210] R=0.596 (std=1.114)  valid=1.000  uniq=0.500  div=0.726  kl=0.0323  clip=0.022  ev=0.203  ent=0.033  curr=0.673  best=6.474  CC=C(F)CCNC(=O)CCO
+[0215] R=0.441 (std=0.803)  valid=1.000  uniq=0.500  div=0.648  kl=0.0523  clip=0.134  ev=-0.091  ent=0.032  curr=0.691  best=6.474  CC=C(F)CCNC(=O)CCO
+[0220] R=0.586 (std=1.074)  valid=1.000  uniq=0.500  div=0.740  kl=0.0518  clip=0.035  ev=-0.420  ent=0.030  curr=0.709  best=6.474  CC=C(F)CCNC(=O)CCO
+[0225] R=0.558 (std=1.040)  valid=1.000  uniq=0.625  div=0.617  kl=0.0225  clip=0.024  ev=-0.875  ent=0.029  curr=0.727  best=6.474  CC=C(F)CCNC(=O)CCO
+[0230] R=0.521 (std=0.998)  valid=1.000  uniq=0.375  div=0.490  kl=0.0306  clip=0.029  ev=0.067  ent=0.028  curr=0.745  best=6.474  CC=C(F)CCNC(=O)CCO
+[0235] R=0.541 (std=0.995)  valid=1.000  uniq=0.625  div=0.745  kl=0.0087  clip=0.010  ev=0.037  ent=0.027  curr=0.764  best=6.474  CC=C(F)CCNC(=O)CCO
+[0240] R=0.524 (std=0.969)  valid=1.000  uniq=0.500  div=0.752  kl=0.0007  clip=0.018  ev=-0.133  ent=0.025  curr=0.782  best=6.474  CC=C(F)CCNC(=O)CCO
+[0245] R=0.518 (std=0.947)  valid=1.000  uniq=0.500  div=0.725  kl=0.0028  clip=0.010  ev=-0.058  ent=0.024  curr=0.800  best=6.474  CC=C(F)CCNC(=O)CCO
+[0250] R=0.490 (std=0.914)  valid=1.000  uniq=0.625  div=0.695  kl=0.0072  clip=0.023  ev=-0.146  ent=0.023  curr=0.818  best=6.474  CC=C(F)CCNC(=O)CCO
+[0255] R=0.497 (std=0.900)  valid=1.000  uniq=0.625  div=0.767  kl=0.0190  clip=0.033  ev=-0.030  ent=0.021  curr=0.836  best=6.474  CC=C(F)CCNC(=O)CCO
+[0260] R=0.475 (std=0.860)  valid=1.000  uniq=0.500  div=0.621  kl=0.0295  clip=0.015  ev=-0.051  ent=0.020  curr=0.855  best=6.474  CC=C(F)CCNC(=O)CCO
+[0265] R=0.439 (std=0.838)  valid=1.000  uniq=0.625  div=0.721  kl=0.0116  clip=0.030  ev=0.069  ent=0.019  curr=0.873  best=6.474  CC=C(F)CCNC(=O)CCO
+[0270] R=0.435 (std=0.812)  valid=1.000  uniq=0.625  div=0.751  kl=0.0114  clip=0.026  ev=0.141  ent=0.018  curr=0.891  best=6.474  CC=C(F)CCNC(=O)CCO
+[0275] R=0.211 (std=0.345)  valid=1.000  uniq=0.625  div=0.755  kl=0.0309  clip=0.024  ev=0.103  ent=0.016  curr=0.909  best=6.474  CC=C(F)CCNC(=O)CCO
+[0280] R=0.400 (std=0.757)  valid=1.000  uniq=0.625  div=0.777  kl=0.0127  clip=0.038  ev=-0.170  ent=0.015  curr=0.927  best=6.474  CC=C(F)CCNC(=O)CCO
+[0285] R=0.403 (std=0.737)  valid=1.000  uniq=0.500  div=0.688  kl=0.0141  clip=0.032  ev=-0.123  ent=0.014  curr=0.945  best=6.474  CC=C(F)CCNC(=O)CCO
+[0290] R=0.400 (std=0.725)  valid=1.000  uniq=0.375  div=0.452  kl=0.0114  clip=0.021  ev=0.019  ent=0.013  curr=0.964  best=6.474  CC=C(F)CCNC(=O)CCO
+[0295] R=-0.018 (std=0.309)  valid=1.000  uniq=0.875  div=0.902  kl=0.0140  clip=0.100  ev=-0.294  ent=0.011  curr=0.982  best=6.474  CC=C(F)CCNC(=O)CCO
+[0300] R=-0.019 (std=0.330)  valid=1.000  uniq=1.000  div=0.929  kl=0.0121  clip=0.139  ev=-0.006  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0305] R=0.014 (std=0.377)  valid=1.000  uniq=1.000  div=0.933  kl=0.0184  clip=0.146  ev=-0.006  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0310] R=0.334 (std=0.655)  valid=1.000  uniq=0.625  div=0.624  kl=0.0143  clip=0.112  ev=0.189  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0315] R=0.379 (std=0.675)  valid=1.000  uniq=0.375  div=0.506  kl=0.0162  clip=0.020  ev=-0.786  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0320] R=0.181 (std=0.368)  valid=1.000  uniq=0.625  div=0.715  kl=0.0669  clip=0.178  ev=0.092  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0325] R=0.357 (std=0.642)  valid=1.000  uniq=0.375  div=0.686  kl=0.0416  clip=0.052  ev=-0.029  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0330] R=0.334 (std=0.652)  valid=1.000  uniq=0.625  div=0.725  kl=0.0168  clip=0.184  ev=0.270  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0335] R=0.346 (std=0.669)  valid=1.000  uniq=0.750  div=0.758  kl=0.0153  clip=0.064  ev=0.056  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0340] R=0.348 (std=0.645)  valid=1.000  uniq=0.750  div=0.794  kl=0.0462  clip=0.117  ev=-0.186  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0345] R=0.374 (std=0.673)  valid=1.000  uniq=0.625  div=0.771  kl=0.0087  clip=0.028  ev=-0.755  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0350] R=0.332 (std=0.654)  valid=1.000  uniq=0.625  div=0.703  kl=0.0197  clip=0.147  ev=-0.030  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0355] R=0.375 (std=0.672)  valid=1.000  uniq=0.625  div=0.725  kl=0.0230  clip=0.071  ev=0.047  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0360] R=0.313 (std=0.634)  valid=1.000  uniq=0.500  div=0.629  kl=0.0151  clip=0.045  ev=0.055  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0365] R=0.174 (std=0.546)  valid=1.000  uniq=0.875  div=0.877  kl=0.0247  clip=0.153  ev=0.004  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0370] R=0.322 (std=0.638)  valid=1.000  uniq=0.625  div=0.776  kl=0.0130  clip=0.026  ev=0.010  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0375] R=0.285 (std=0.606)  valid=1.000  uniq=0.750  div=0.731  kl=0.0335  clip=0.015  ev=-0.272  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0380] R=0.006 (std=0.385)  valid=1.000  uniq=1.000  div=0.928  kl=0.0131  clip=0.134  ev=-0.056  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0385] R=0.157 (std=0.542)  valid=1.000  uniq=0.750  div=0.767  kl=0.0150  clip=0.053  ev=-0.007  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0390] R=0.151 (std=0.206)  valid=1.000  uniq=0.500  div=0.688  kl=0.0493  clip=0.080  ev=0.061  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0395] R=0.277 (std=0.596)  valid=1.000  uniq=0.625  div=0.691  kl=0.0668  clip=0.026  ev=-0.164  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0400] R=0.089 (std=0.469)  valid=1.000  uniq=0.875  div=0.895  kl=0.0138  clip=0.137  ev=-0.205  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0405] R=0.304 (std=0.631)  valid=1.000  uniq=0.500  div=0.530  kl=0.0073  clip=0.017  ev=-0.098  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0410] R=0.287 (std=0.609)  valid=1.000  uniq=0.500  div=0.596  kl=0.0153  clip=0.065  ev=-4.171  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0415] R=0.148 (std=0.213)  valid=1.000  uniq=0.500  div=0.652  kl=0.0307  clip=0.029  ev=0.168  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0420] R=0.246 (std=0.603)  valid=1.000  uniq=0.750  div=0.711  kl=0.0144  clip=0.113  ev=-0.014  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0425] R=0.286 (std=0.764)  valid=1.000  uniq=0.500  div=0.655  kl=0.0539  clip=0.069  ev=-1.465  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0430] R=0.254 (std=0.702)  valid=1.000  uniq=0.625  div=0.649  kl=0.0557  clip=0.124  ev=-0.007  ent=0.010  curr=1.000  best=6.474  CC=C(F)CCNC(=O)CCO
+[0435] R=0.424 (std=1.569)  valid=1.000  uniq=0.750  div=0.687  kl=0.0145  clip=0.071  ev=0.003  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0440] R=0.583 (std=2.094)  valid=1.000  uniq=0.750  div=0.624  kl=0.0417  clip=0.047  ev=-0.061  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0445] R=0.256 (std=1.070)  valid=1.000  uniq=0.875  div=0.602  kl=0.0171  clip=0.093  ev=0.013  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0450] R=0.574 (std=2.086)  valid=1.000  uniq=1.000  div=0.740  kl=0.0502  clip=0.109  ev=0.058  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0455] R=0.603 (std=2.153)  valid=1.000  uniq=0.750  div=0.617  kl=0.0095  clip=0.031  ev=-0.030  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0460] R=0.184 (std=0.579)  valid=1.000  uniq=0.875  div=0.694  kl=0.0290  clip=0.112  ev=-0.044  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0465] R=0.081 (std=0.368)  valid=1.000  uniq=1.000  div=0.691  kl=0.0177  clip=0.083  ev=0.000  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0470] R=0.170 (std=0.514)  valid=1.000  uniq=0.875  div=0.651  kl=0.0708  clip=0.094  ev=0.006  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0475] R=0.224 (std=0.728)  valid=1.000  uniq=0.750  div=0.586  kl=0.0128  clip=0.092  ev=-0.004  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0480] R=0.553 (std=1.992)  valid=1.000  uniq=0.875  div=0.751  kl=0.0070  clip=0.057  ev=0.023  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0485] R=0.576 (std=2.076)  valid=1.000  uniq=1.000  div=0.822  kl=0.0061  clip=0.028  ev=-0.008  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0490] R=0.564 (std=2.041)  valid=1.000  uniq=0.875  div=0.670  kl=0.0120  clip=0.036  ev=-0.001  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0495] R=0.458 (std=1.801)  valid=1.000  uniq=1.000  div=0.609  kl=0.0362  clip=0.073  ev=-0.030  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0500] R=0.252 (std=0.793)  valid=1.000  uniq=0.875  div=0.441  kl=0.2028  clip=0.082  ev=0.023  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0505] R=0.194 (std=1.072)  valid=1.000  uniq=1.000  div=0.922  kl=0.0606  clip=0.145  ev=0.136  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0510] R=0.338 (std=1.410)  valid=1.000  uniq=0.875  div=0.606  kl=0.0328  clip=0.088  ev=0.017  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0515] R=0.593 (std=2.059)  valid=1.000  uniq=0.750  div=0.610  kl=0.0280  clip=0.056  ev=0.014  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0520] R=0.511 (std=1.921)  valid=1.000  uniq=0.875  div=0.458  kl=0.0166  clip=0.024  ev=-0.021  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0525] R=0.563 (std=2.084)  valid=1.000  uniq=0.625  div=0.586  kl=0.0063  clip=0.008  ev=0.004  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0530] R=0.047 (std=0.617)  valid=1.000  uniq=1.000  div=0.912  kl=0.0721  clip=0.074  ev=0.045  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0535] R=0.231 (std=1.260)  valid=1.000  uniq=1.000  div=0.791  kl=0.0170  clip=0.087  ev=0.009  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0540] R=0.443 (std=1.812)  valid=1.000  uniq=1.000  div=0.607  kl=0.0139  clip=0.067  ev=0.007  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0545] R=0.544 (std=2.087)  valid=1.000  uniq=0.750  div=0.464  kl=0.0271  clip=0.035  ev=-0.031  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0550] R=0.536 (std=2.068)  valid=1.000  uniq=0.750  div=0.507  kl=0.0038  clip=0.005  ev=-0.040  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0555] R=0.519 (std=2.022)  valid=1.000  uniq=0.625  div=0.136  kl=0.0106  clip=0.014  ev=0.022  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0560] R=0.544 (std=2.086)  valid=1.000  uniq=0.875  div=0.858  kl=0.0022  clip=0.001  ev=-0.002  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0565] R=0.544 (std=2.086)  valid=1.000  uniq=0.625  div=0.170  kl=0.0005  clip=0.000  ev=0.001  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0570] R=0.530 (std=2.059)  valid=1.000  uniq=0.750  div=0.565  kl=0.0189  clip=0.018  ev=0.086  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0575] R=0.581 (std=2.159)  valid=1.000  uniq=0.625  div=0.592  kl=0.0001  clip=0.000  ev=0.051  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0580] R=0.562 (std=2.124)  valid=1.000  uniq=0.625  div=0.315  kl=0.0001  clip=0.000  ev=-0.013  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0585] R=0.562 (std=2.124)  valid=1.000  uniq=0.625  div=0.134  kl=0.0000  clip=0.000  ev=0.005  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0590] R=0.562 (std=2.124)  valid=1.000  uniq=0.625  div=0.243  kl=0.0000  clip=0.000  ev=-0.017  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0595] R=0.562 (std=2.124)  valid=1.000  uniq=0.625  div=0.000  kl=0.0000  clip=0.000  ev=0.033  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0600] R=0.562 (std=2.124)  valid=1.000  uniq=0.625  div=0.417  kl=0.0001  clip=0.000  ev=-0.027  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0605] R=0.572 (std=2.142)  valid=1.000  uniq=0.625  div=0.577  kl=0.0000  clip=0.000  ev=0.052  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0610] R=0.576 (std=2.150)  valid=1.000  uniq=0.625  div=0.766  kl=0.0000  clip=0.000  ev=-0.002  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0615] R=0.585 (std=2.168)  valid=1.000  uniq=0.625  div=0.823  kl=0.0000  clip=0.000  ev=0.035  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0620] R=0.585 (std=2.168)  valid=1.000  uniq=0.625  div=0.665  kl=0.0001  clip=0.000  ev=0.004  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0625] R=0.562 (std=2.124)  valid=1.000  uniq=0.750  div=0.372  kl=0.0000  clip=0.000  ev=0.013  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0630] R=0.562 (std=2.124)  valid=1.000  uniq=0.875  div=0.368  kl=0.0001  clip=0.000  ev=-0.096  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0635] R=0.567 (std=2.133)  valid=1.000  uniq=0.875  div=0.591  kl=0.0000  clip=0.000  ev=0.013  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0640] R=0.576 (std=2.150)  valid=1.000  uniq=0.875  div=0.715  kl=0.0000  clip=0.000  ev=-0.026  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0645] R=0.576 (std=2.150)  valid=1.000  uniq=0.875  div=0.590  kl=0.0000  clip=0.000  ev=0.029  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0650] R=0.567 (std=2.133)  valid=1.000  uniq=0.875  div=0.721  kl=0.0000  clip=0.000  ev=0.030  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0655] R=0.572 (std=2.142)  valid=1.000  uniq=0.750  div=0.789  kl=0.0000  clip=0.000  ev=0.086  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0660] R=0.581 (std=2.159)  valid=1.000  uniq=0.750  div=0.699  kl=0.0000  clip=0.000  ev=0.013  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0665] R=0.576 (std=2.150)  valid=1.000  uniq=0.625  div=0.526  kl=0.0052  clip=0.001  ev=-0.145  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0670] R=0.562 (std=2.124)  valid=1.000  uniq=0.625  div=0.386  kl=0.0000  clip=0.000  ev=0.023  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0675] R=0.562 (std=2.124)  valid=1.000  uniq=0.625  div=0.406  kl=0.0000  clip=0.000  ev=-0.002  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0680] R=0.567 (std=2.133)  valid=1.000  uniq=0.625  div=0.463  kl=0.0000  clip=0.000  ev=-0.042  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0685] R=0.025 (std=0.261)  valid=1.000  uniq=0.375  div=0.471  kl=0.0145  clip=0.108  ev=0.091  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0690] R=0.032 (std=0.270)  valid=1.000  uniq=0.250  div=0.375  kl=0.0057  clip=0.068  ev=-0.047  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0695] R=0.157 (std=0.475)  valid=1.000  uniq=0.500  div=0.643  kl=0.0549  clip=0.262  ev=0.021  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0700] R=0.281 (std=0.590)  valid=1.000  uniq=0.625  div=0.815  kl=0.0781  clip=0.158  ev=0.039  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0705] R=0.266 (std=0.640)  valid=1.000  uniq=0.875  div=0.864  kl=0.0228  clip=0.094  ev=-0.006  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0710] R=0.231 (std=0.867)  valid=1.000  uniq=1.000  div=0.888  kl=0.0124  clip=0.085  ev=-0.010  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0715] R=0.359 (std=1.240)  valid=1.000  uniq=0.625  div=0.635  kl=0.0361  clip=0.061  ev=-0.029  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0720] R=0.187 (std=0.956)  valid=1.000  uniq=0.750  div=0.759  kl=0.0649  clip=0.139  ev=-0.030  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0725] R=0.305 (std=1.115)  valid=1.000  uniq=0.750  div=0.720  kl=0.1029  clip=0.090  ev=0.005  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0730] R=0.321 (std=1.227)  valid=1.000  uniq=0.750  div=0.749  kl=0.0979  clip=0.081  ev=-0.019  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0735] R=0.432 (std=1.600)  valid=1.000  uniq=0.625  div=0.687  kl=0.0310  clip=0.022  ev=0.007  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0740] R=0.428 (std=1.614)  valid=1.000  uniq=0.875  div=0.668  kl=0.0540  clip=0.027  ev=0.003  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0745] R=0.461 (std=1.676)  valid=1.000  uniq=0.750  div=0.522  kl=0.1088  clip=0.022  ev=0.054  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0750] R=0.243 (std=0.999)  valid=1.000  uniq=0.875  div=0.711  kl=0.0132  clip=0.022  ev=-0.021  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0755] R=0.334 (std=1.335)  valid=1.000  uniq=1.000  div=0.779  kl=0.0226  clip=0.075  ev=0.042  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0760] R=0.403 (std=1.529)  valid=1.000  uniq=0.875  div=0.631  kl=0.0557  clip=0.014  ev=0.005  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0765] R=0.539 (std=1.907)  valid=1.000  uniq=0.750  div=0.760  kl=0.0177  clip=0.051  ev=0.072  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0770] R=0.527 (std=1.837)  valid=1.000  uniq=0.875  div=0.614  kl=0.0280  clip=0.016  ev=0.009  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0775] R=0.251 (std=1.383)  valid=1.000  uniq=0.750  div=0.695  kl=0.0553  clip=0.168  ev=0.024  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0780] R=0.532 (std=1.844)  valid=1.000  uniq=0.750  div=0.635  kl=0.1254  clip=0.081  ev=-0.004  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0785] R=0.550 (std=1.966)  valid=1.000  uniq=0.750  div=0.648  kl=0.0374  clip=0.056  ev=0.072  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0790] R=0.498 (std=1.889)  valid=1.000  uniq=0.625  div=0.505  kl=0.0193  clip=0.120  ev=0.019  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+[0795] R=0.434 (std=1.542)  valid=1.000  uniq=0.750  div=0.763  kl=0.0263  clip=0.032  ev=-0.036  ent=0.010  curr=1.000  best=9.391  CCC(CN)C1CCCCCCCCC1
+wandb: 
+wandb: Run history:
+wandb:          best/reward ▁▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂████████████████████
+wandb: critic/explained_var ▇▇▇▇▆▇▇███▇▇▇█▇▄█▇▇█▇▁▇▇▇▇█▇▇▇▇█▇▇▇▇██▇█
+wandb:     curriculum_ratio ▁▁▁▁▂▂▂▃▄▅▆▆▇▇██████████████████████████
+wandb:         entropy_coef ██▇▇▆▆▆▆▅▄▄▃▃▃▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:       eval/diversity █▇▇▇▇▇▆▇█▇▆▅▆▆▆▆█▅▆▇▆▆▆▆▄▇▅▂▁▇▆▇▄▇▇▇▆▆▅▅
+wandb:     eval/unique_rate ▄█▇▅▅▄▅▇▂▄▂▄▂▂▁▄▁▄▄▇▄▇▂▅▇▇▄▅▅▄▇▅▄▄▂▅▅▇▇▅
+wandb:      eval/valid_rate ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:     gen/n_terminated ▄▆▇▇▆▇▇▇▆▅██▆████████▇▆▂▆▃▂▁▁▂▂▂▂▂▂▃▆▂▂▂
+wandb:          gen/sa_mean █▅▁▃▂▃▂▅▃▄▄▁▆▇▄▃▂▆▃█▁▂▁▂▃▂█▂▃▁▁▁▂▁▁▄▇▂▃▄
+wandb:        ppo/clip_frac ▅▄▅▃▄█▆▃▃▃▂▂▂▆▇▅▄▅▄▄▂▃▄▂▄▂▁▁▁▁▁▁▁▁▄▄▂▃▂▂
+wandb:                   +7 ...
+wandb: 
+wandb: Run summary:
+wandb:          best/reward 9.39098
+wandb: critic/explained_var -0.03605
+wandb:     curriculum_ratio 1
+wandb:         entropy_coef 0.01
+wandb:       eval/diversity 0.76336
+wandb:     eval/unique_rate 0.75
+wandb:      eval/valid_rate 1
+wandb:     gen/n_terminated 130
+wandb:          gen/sa_mean 3.79224
+wandb:        ppo/clip_frac 0.03174
+wandb:                   +7 ...
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/sagemaker-user/Molecular-Architect-RL/src/wandb/offline-run-20260624_165347-jsy947zl
+wandb: Find logs at: ./wandb/offline-run-20260624_165347-jsy947zl/logs
