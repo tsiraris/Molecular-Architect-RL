@@ -59,7 +59,7 @@ CONFIG = {                                                                      
     "clip_epsilon": 0.2,                                                                    # Set the PPO clipping threshold to prevent destructively large policy updates
     "target_kl": 0.02,                                                                      # Set the target KL divergence threshold to trigger early stopping in an epoch
     "entropy_coef_start": 0.08,                                                             # Set the initial exploration bonus multiplier to encourage random early actions
-    "entropy_coef_end": 0.01,                                                               # Set the final minimal exploration bonus multiplier for late-stage exploitation
+    "entropy_coef_end": 0.02,                                                               # Set the final minimal exploration bonus multiplier for late-stage exploitation
     "value_coef": 0.5,                                                                      # Set the weighting factor for the critic's value loss in the total loss sum
     "max_grad_norm": 1.0,                                                                   # Set the maximum allowed norm for gradients to prevent exploding gradients
     # Training parameters
@@ -67,7 +67,7 @@ CONFIG = {                                                                      
     "ppo_epochs": 10,                                                                       # Set the number of times the network iterates over the collected buffer data
     "buffer_size": 2048,                                                                    # Set total transitions per update (across envs) to gather before updating
     "num_envs": 8,                                                                          # Set the number of parallel vectorized environments to run concurrently
-    "updates": 500,                                                                         # Set the total number of data collection and PPO update cycles to execute
+    "updates": 300,                                                                         # Set the total number of data collection and PPO update cycles to execute
     # Model parameters
     "hidden_dim": 128,                                                                      # Set the dimensionality of the hidden feature vectors in the GNN layers
     "edge_dim": 4,                                                                          # Set the dimensionality of the one-hot encoded bond type edge features
@@ -90,20 +90,20 @@ CONFIG = {                                                                      
     # Defaults below reproduce the Stage-1 run exactly (affinity and diversity off). 
     # Flip use_affinity/use_diversity on for the Stage-2 experiment.
     # --------------------------------------------------------------------------------------------------------------
-"use_affinity": False,                                                                      # Add the learned-surrogate affinity term to the terminal reward
+"use_affinity": True,                                                                      # Add the learned-surrogate affinity term to the terminal reward
     "surrogate_dir": "../artifacts/surrogate_kras",                                         # Directory holding the trained deep ensemble + norm.json
-    "w_property": 1.0,                                                                      # Weight on the 2D property term P (kept as a low prior when affinity is on)
-    "w_affinity": 1.0,                                                                      # Weight on the affinity term A (ramped by the curriculum_ratio)
+    "w_property": 0.5,                                                                      # Weight on the 2D property term P (kept as a low prior when affinity is on)
+    "w_affinity": 0.7,                                                                      # Weight on the affinity term A (ramped by the curriculum_ratio)
     "beta_uncertainty": 0.5,                                                                # Penalty coefficient on ensemble uncertainty (anti proxy-hacking)
     "reward_scale": 12.0,                                                                   # Overall scale so reward magnitude matches Stage-1 (base ceiling was ~12)
     # Add the Tanimoto-to-archive diversity penalty (anti mode-collapse)
-    "use_diversity": False,                                                                  
+    "use_diversity": True,                                                                  
     # Weight on the diversity penalty D (~0.5–1.0 to fight collapse)
-    "w_diversity": 0.0,                                                                      
+    "w_diversity": 1.0,                                                                      
     # Rolling window of recent molecules used for the diversity penalty
     "diversity_archive_size": 256,                                                           
     # Enable pocket-FiLM conditioning of the policy (single-target KRAS)
-    "use_pocket": False,                                                                    
+    "use_pocket": True,                                                                    
     # Path to the pocket embedding produced by pocket/encode_pocket.py
     "pocket_npy": "../data/kras_g12c_pocket.npy",                                           
 }                                                                                           
