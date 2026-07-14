@@ -60,3 +60,12 @@ covalent_note: >                                                    # Multi-line
   KRAS G12C inhibitors bind covalently to Cys12. gnina/Vina dock non-covalently, so the docking
   score is a RELATIVE ranking proxy, never an absolute dG. Validate top-k with Boltz-2 + OpenMM,
   and never report absolute binding free energies.
+# --------------------------------------------------------------------------------------------
+# Covalent Docking Configuration (Stage 3)
+# Defines the geometry and warhead SMARTS for covalent docking to Cys12 with gnina.
+# Used by oracle/covalent_dock.py and oracle/interactions.py.
+# --------------------------------------------------------------------------------------------
+covalent:
+  cys_spec: "A:12:SG"                                              # gnina --covalent_rec_atom: "chain:residue:atom of the Cys12 thiol sulfur"
+  lig_warhead_smarts: "[CH2]=[CH]C(=O)N"                           # gnina --covalent_lig_atom_pattern: terminal acrylamide CH2= that attacks Cys12
+  enable: true                                                     # When True, warhead-bearing molecules in the top-k are docked covalently; others non-covalently

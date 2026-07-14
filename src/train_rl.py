@@ -90,7 +90,7 @@ CONFIG = {                                                                      
     # Defaults below reproduce the Stage-1 run exactly (affinity and diversity off). 
     # Flip use_affinity/use_diversity on for the Stage-2 experiment.
     # --------------------------------------------------------------------------------------------------------------
-"use_affinity": True,                                                                      # Add the learned-surrogate affinity term to the terminal reward
+    "use_affinity": True,                                                                      # Add the learned-surrogate affinity term to the terminal reward
     "surrogate_dir": "../artifacts/surrogate_kras",                                         # Directory holding the trained deep ensemble + norm.json
     "w_property": 0.5,                                                                      # Weight on the 2D property term P (kept as a low prior when affinity is on)
     "w_affinity": 0.7,                                                                      # Weight on the affinity term A (ramped by the curriculum_ratio)
@@ -106,6 +106,13 @@ CONFIG = {                                                                      
     "use_pocket": True,                                                                    
     # Path to the pocket embedding produced by pocket/encode_pocket.py
     "pocket_npy": "../data/kras_g12c_pocket.npy",                                           
+    # --------------------------------------------------------
+    # Stage-3: warhead-aware generation (covalent KRAS G12C design)
+    # Set True to add the Michael-acceptor bonus in reward/warhead.py.
+    # Set False (default) for Stage-2 runs.
+    # --------------------------------------------------------
+    "use_warhead": False,                                                                    # Toggle Michael-acceptor warhead bonus; True for Stage-3, False for Stage-1/2 backward compat
+    "w_warhead": 0.15,                                                                       # Bonus weight when use_warhead=True and the molecule has a warhead motif
 }                                                                                           
 
 def set_seed(seed: int) -> None:
@@ -304,6 +311,8 @@ class TopK:
         # TopK Addition & Sorting: Insert new data, sort descending by reward, and enforce the capacity limit.
         if smiles is None:                                                                  # Check if the provided string is a null-type representing a fatal generation
             return                                                                          # Immediately exit the function without mutating the tracking list
+        if any(s == smiles for _, s in self.items):                                         # Stage-3 dedup: skip exact-SMILES duplicates; list is sorted so first occurrence has the best reward
+            return                                                                          # Early exit keeps the archive from filling with the same molecule under different rewards
         self.items.append((float(reward), smiles))                                          # Append the newly discovered candidate as a tuple to the tracking list
         self.items.sort(key=lambda x: x[0], reverse=True)                                   # Sort the entire list in-place dynamically based on the reward scalar descending
         self.items = self.items[: self.k]                                                   # Truncate the list to strictly enforce the configured upper capacity bound
@@ -532,13 +541,15 @@ def train():
         "w_property": CONFIG["w_property"], "w_affinity": CONFIG["w_affinity"],                     # Pass numerical scalar weights defining the linear objective combination
         "w_diversity": CONFIG["w_diversity"], "beta_uncertainty": CONFIG["beta_uncertainty"],       # Pass penalty coefficients for mode collapse and epistemic uncertainty
         "reward_scale": CONFIG["reward_scale"], "property_ceiling": 12.0,                           # Pass final multiplication scalars to match gradient magnitudes
+        "use_warhead": CONFIG.get("use_warhead", False),                                            # Stage-3: thread warhead flag to chem_env._terminal_reward -> reward/warhead.py
+        "w_warhead": CONFIG.get("w_warhead", 0.15),                                                 # Stage-3: warhead bonus weight passed to reward/composite.combine()
     }                                                                                               # Close the reward configuration dictionary
 
     env = VectorMoleculeEnv(CONFIG["num_envs"], device, action_spec=spec,
                             affinity_scorer=affinity_scorer, diversity_archive=diversity_archive,
                             reward_cfg=reward_cfg)                                                  # Initialize a vectorized environment for molecular generation (parallel simulation of multiple environments/molecules simultaneously).
     
-    # Also if enabled, load the pocket embedding
+    # Also if enabled from config, load the pocket embedding
     pocket_dim = 0                                                                                  # Initialize the target pocket dimensionality fallback counter to zero
     pocket_vec = None                                                                               # Initialize the FiLM modulation vector placeholder to None by default
     if CONFIG["use_pocket"]:                                                                        # Check if the structural pocket conditioning flag is active
@@ -578,12 +589,15 @@ def train():
         # ---------------------------------------------------------------------------------
         ep_term_rewards = []                                                                # Tracker for terminal rewards of episodes finished this update
         steps_per_env = CONFIG["buffer_size"] // CONFIG["num_envs"]                         # Compute the exact integer number of transitions to pull from each parallel worker
+        # Rollout loop: Collect a batch of transitions for each environment that will fill 
+        # the memory buffer by stepping through it with the current policy.
         for _ in range(steps_per_env):                                                      # Iterate over the allotted timeframe for trajectory generation
             with torch.no_grad():                                                           # Temporarily suspend gradient tracking globally to vastly accelerate collection
-                batch = Batch.from_data_list(obs).to(device)                                # Convert the list of observations (one per environment) into a single batched graph representation suitable for input to the GNN agent.
-                masks = env.get_masks()                                                     # shape (num_envs, max_atoms) - bool action masks for each environment (which actions are valid for each environment).
+                batch = Batch.from_data_list(obs).to(device)                                # Convert the list of torch tensor observations (one per environment [atom features, edge_index, edge_attr, node_mask]) into a single batched graph representation suitable for input to the GNN agent.
+                masks = env.get_masks()                                                     # shape (num_envs, max_atoms) - Bool action masks for each environment (which actions are valid for each environment).
                 with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")): # Engage the hardware accelerated mixed precision context
-                    # Evaluate states to retrieve masked logits and value baselines for each environment. The agent outputs logits for the action distribution and value estimates for the critic.
+                    # Pass the graph states through the agent to retrieve masked logits (from the actor) and value baselines (from the critic) for each environment. 
+                    # The agent outputs logits for the action distribution and scalar value estimates for the current state.
                     logits, values = agent(batch.x, batch.edge_index, batch.edge_attr, batch.batch, masks) 
 
                 # Convert the action logits for each environment into a categorical distribution (softmax) 
@@ -592,8 +606,8 @@ def train():
                 actions = dist.sample()                                                     # Draw specific discrete commands by sampling the calculated probability distribution
                 log_probs = dist.log_prob(actions)                                          # Extract the numerical logarithmic probabilities of the actually sampled actions
 
-            # Step all the environments forward with the sampled actions
-            next_obs, rewards, dones, infos = env.step(actions, curr_ratio)                 
+            # Step all the environments forward with the sampled actions and get the next state observations, rewards, done flags, and info dictionaries. 
+            next_obs, rewards, dones, infos = env.step(actions, curr_ratio)                 # The "curr_ratio" is passed to the environment to scale the reward function according to the curriculum schedule.
 
             # Loop over each distinct simulated environment instance
             for e in range(CONFIG["num_envs"]):                                             
@@ -616,6 +630,7 @@ def train():
                     term_smi = infos[e].get("terminal_smiles", "INVALID")                   
                     topk.add(float(rewards[e].item()), term_smi)                            
                     ep_term_rewards.append(float(rewards[e].item()))        
+            
             # Overwrite historical observational tensors with the newly advanced batch
             obs = next_obs                                                                  
 
@@ -624,13 +639,14 @@ def train():
         # Guess values for non-terminated edges and compute the GAE advantages.
         # ---------------------------------------------------------------------------------
         with torch.no_grad():                                                               # Suspend PyTorch's autograd tracker again for simple numerical inference
-            batch = Batch.from_data_list(obs).to(device)                                    # Transform the final dangling observations into a unified graph batch tensor
-            masks = env.get_masks()                                                         # Pull the final validity boolean masking tensor from the RDKit simulator
+            batch = Batch.from_data_list(obs).to(device)                                    # Transform the (next to the previous) observations into a unified graph batch tensor
+            masks = env.get_masks()                                                         # Pull the final validity boolean action masking tensor from the RDKit simulator
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")): # Engage the high speed mixed precision tensor operations mode
-                _, last_values = agent(batch.x, batch.edge_index, batch.edge_attr, batch.batch, masks) # bootstrap the value of the final state for any episodes that haven't ended yet.
+                # Pass these (next) graph states through the agent to retrieve only the value scalar baselines (from the critic) for any unterminated environments.
+                _, last_values = agent(batch.x, batch.edge_index, batch.edge_attr, batch.batch, masks) 
 
-        # Compute advantages and returns using GAE for each environment's trajectory 
-        # and flatten the collected transitions into tensors for training.
+        # Compute advantages and returns using GAE for each environment's trajectory, and update all the 
+        # PPO buffer tracked lists (advantages, returns, value estimates, log probabilities etc).
         buffer.finalize(last_values)                                                        
 
         # ---------------------------------------------------------------------------------
@@ -648,9 +664,9 @@ def train():
         # mini-batches to update the policy and value networks.
         for _epoch in range(CONFIG["ppo_epochs"]):                                          # Iterate inner optimization loops repeatedly processing the same locked dataset
             epoch_kls = []                                                                  # Initialize a temporary array to track KL divergence specifically for this inner iteration
-            # Invoke buffer generator to slice the full dataset into randomized (if shuffle=True) sub-batches.
+            # Stable PPO training standard: Random mix of timesteps, states and environments, to break the temporal correlation of the trajectories.
+            # Invoke buffer generator to slice the full buffer dataset into randomized (if shuffle=True) sub-batches.
             # Each sub-batch contains a list of indices that correspond to the transitions stored in the buffer. 
-            # Random mix of molecules, timesteps, and environments, to break the temporal correlation of the trajectories (standard requirement for stable PPO training).
             for idx in buffer.get_batches(CONFIG["batch_size"], shuffle=True):              
                 idx_list = idx.tolist()                                                     # Convert torch index tensor into standard python list for arbitrary array accesses
 
@@ -658,7 +674,7 @@ def train():
                 # contains the node features, edge index, and edge attributes for a single environment's state. 
                 batch_list = [                                                              
                     Data(x=buffer.states[i][0], edge_index=buffer.states[i][1], edge_attr=buffer.states[i][2]) # Re-package stored PyG tuples into native PyG Data structures
-                    for i in idx_list                                                       # Iterate exclusively over the specific index list
+                    for i in idx_list                                                       # Iterate exclusively over the specific index list of the current mini-batch
                 ]                                                                           
                 
                 batch_masks = torch.stack([buffer.states[i][3] for i in idx_list], dim=0)   # Stack the action masks for the current batch of indices into a single tensor of shape (batch_size, max_atoms).
@@ -672,36 +688,43 @@ def train():
                 adv_b = adv[idx]                                                            # Extract the newly zero-mean normalized advantage estimations
 
                 with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")): # Open the mixed precision context window targeting GPU execution
+                    # Pass the current mini-batch of graph states through the agent to use the 
+                    # latest policy and value networks to compute the new logits and value estimates,
+                    # which will be used to compute the PPO loss and update the network weights.
                     logits, values = agent(                                                 # Feed forward pass routing batch graph vectors into the neural network
                         batch_graph.x, batch_graph.edge_index, batch_graph.edge_attr, batch_graph.batch, batch_masks # Input features arrays
                     )                                                                       # Close inference call
                     dist = Categorical(logits=logits)                                       # Restructure the updated raw logits into proper probability distributions
 
                     logp = dist.log_prob(actions_b)                                         # Calculate the log probabilities of the actions taken in the batch according to the current policy.
-                    ratio = torch.exp(logp - old_logp_b)                                    # Calculate the probability ratio for PPO (=exponent of the difference between the new log probabilities and the old log probabilities).
+                    # For each batch row, calculate the probability ratio for PPO for 
+                    # the same actions (exponent of new and old log probs difference).
+                    ratio = torch.exp(logp - old_logp_b)                                    # Exponent of the difference between the new log probabilities and the old log probabilities for the same actions.
                     
                     # Policy loss is computed as the negative of the minimum between the 
-                    # unbounded surrogate and the clipped surrogate, averaged over the batch.
+                    # unbounded surrogate and the clipped surrogate (probability ratio * advantage), 
+                    # averaged over the batch.
                     surr1 = ratio * adv_b                                                   # Compute the unbounded primary surrogate policy objective directly
                     surr2 = torch.clamp(ratio, 1.0 - CONFIG["clip_epsilon"], 1.0 + CONFIG["clip_epsilon"]) * adv_b # Compute the severely restricted clipped surrogate objective
-                    policy_loss = -torch.min(surr1, surr2).mean()                           # PPO policy loss with clipping: select pessimistic bound and invert for descent
+                    policy_loss = -torch.min(surr1, surr2).mean()                           # PPO policy loss with clipping: For each batch row, select pessimistic bound and invert for descent
 
                     # Value loss is computed as the maximum between the squared error of the current value 
-                    # estimates and the squared error of the clipped value estimates, averaged over the batch.
-                    values_old = buffer.values[idx]                                         # Retrieve the historic value expectations stored in the replay memory
-                    values_clipped = values_old + torch.clamp(                              # Compute pessimistic boundary constraining how fast the critic is allowed to update
-                        values - values_old, -CONFIG["clip_epsilon"], CONFIG["clip_epsilon"]# Clamp delta to hyperparameter threshold
-                    )                                                                       # Close clipped value boundary
-                    vloss1 = (values - returns_b).pow(2)                                    # Calculate raw Mean Squared Error against true returns
-                    vloss2 = (values_clipped - returns_b).pow(2)                            # Calculate heavily penalized MSE using the restricted clipped estimations
-                    value_loss = 0.5 * torch.max(vloss1, vloss2).mean()                     # PPO value loss with clipping: choose the worst case bounding error to optimize
+                    # estimates (current value - buffer return)^2 and the squared error of the clipped value 
+                    # estimates (clipped buffer value - buffer return)^2, averaged over the batch.
+                    values_old = buffer.values[idx]                                             # Retrieve the historic value expectations stored in the replay memory
+                    values_clipped = values_old + torch.clamp(                                  # Compute pessimistic boundary constraining how fast the critic is allowed to update
+                        values - values_old, -CONFIG["clip_epsilon"], CONFIG["clip_epsilon"]    # Clamp delta to hyperparameter threshold
+                    )                                                                           # Close clipped value boundary
+                    vloss1 = (values - returns_b).pow(2)                                        # Calculate raw Mean Squared Error against true returns
+                    vloss2 = (values_clipped - returns_b).pow(2)                                # Calculate heavily penalized MSE using the restricted clipped estimations
+                    value_loss = 0.5 * torch.max(vloss1, vloss2).mean()                         # PPO value loss with clipping: choose the worst case bounding error to optimize
 
                     # Entropy is the expectation of the negative log probability of the current policy, averaged over the batch. 
                     entropy = dist.entropy().mean()                                             # Extract the numeric average entropy of the newly parameterized distribution
                     
-                    # Loss is the weighted sum of the policy loss, value loss, and entropy, where the value loss 
-                    # is scaled by a coefficient and the entropy is subtracted to encourage exploration in action selection.
-                    loss = policy_loss + CONFIG["value_coef"] * value_loss - ent_coef * entropy # Aggregate actor error, scaled critic error, and subtracted exploration bonus
+                    # Loss is the weighted sum of the policy loss, value loss, and entropy, with the 
+                    # two last terms are scaled by a coefficient. Entropy is subtracted to encourage exploration in action selection.
+                    loss = policy_loss + CONFIG["value_coef"] * value_loss - ent_coef * entropy     # Aggregate actor error, scaled critic error, and subtracted exploration bonus
 
                 # Backpropagate the loss through the network and update the network weights.
                 optimizer.zero_grad(set_to_none=True)                                       # Erase historical accumulated gradient tensors to prevent compounding (set_to_none is faster and frees memory)
@@ -711,21 +734,20 @@ def train():
                 scaler.step(optimizer)                                                      # Inject the processed gradient deltas back into network weights
                 scaler.update()                                                             # Command the AMP engine to evaluate internal multiplier dynamics
 
-                # Since PPO re-uses the same batch of data for multiple epochs (ppo_epochs). If we update the network
-                # too many times on the same data, the policy will drift too far from the old policy (Trust Region breakdown).
+                # Avoiding Trust Region Breakdown: PPO re-uses the same batch of data for multiple
+                # epochs (ppo_epochs). Updating the network too many times based on the same data, 
+                # will drift the policy towards a local max and cause the agent to diverge too far from the old policy.
                 with torch.no_grad():                                                       # Bypass autograd engine to quickly calculate secondary tracking metrics
-                    # Compute the approximate KL divergence between the old and new policy for the current batch,
-                    # used for monitoring and early stopping of PPO updates if the policy changes too much for this batch.
-                    kl = (old_logp_b - logp).mean().item()                                  # Approximate KL divergence between the old and new policy for the current batch, used for monitoring and early stopping of PPO updates if the policy changes too much.
+                    # For the current batch: Compute the approximate KL divergence between the old and new policy.
+                    kl = (old_logp_b - logp).mean().item()                                  # Used for monitoring and early stopping of PPO updates if the policy changes too much.
                     epoch_kls.append(kl)                                                    # Push KL scalar to the epoch averaging accumulator
-                    # Calculate and save the fraction of actions in the batch for which the probability ratio was outside
-                    # the clipping range, used as a diagnostic metric to understand how much the policy is changing during updates.
-                    clip_frac = (torch.abs(ratio - 1.0) > CONFIG["clip_epsilon"]).float().mean().item() # Fraction of actions in the batch for which the probability ratio was outside the clipping range, used as a diagnostic metric to understand how much the policy is changing during updates.
+                    # Fraction of actions in the batch for which the probability ratio was outside the clipping range.
+                    clip_frac = (torch.abs(ratio - 1.0) > CONFIG["clip_epsilon"]).float().mean().item() # Used as a diagnostic metric to understand how much the policy is changing during updates.
                     clip_fracs.append(clip_frac)                                            # Push clip fraction to the diagnostic averaging array
                     losses.append(loss.item())                                              # Push the absolute scalar composite loss value to the tracker
 
-            # Early Stopping: If the average KL divergence for this epoch exceeds the target KL specified 
-            # in the CONFIG, break out of the PPO update loop (guard against catastrophic unlearning).
+            # Early Stopping against catastrophic unlearning: If the average KL divergence
+            # for this epoch exceeds the threshold (CONFIG["target_kl"]), break out of the PPO update loop.
             if CONFIG["target_kl"] is not None:                                                 # If the target KL divergence is specified in the CONFIG
                 mean_kl = float(np.mean(epoch_kls)) if epoch_kls else 0.0                       # Mathematically average out the KL drift spanning the inner batch loops
                 approx_kls.append(mean_kl)                                                      # Add computed average to the master loop logging arrays
@@ -742,16 +764,16 @@ def train():
             smiles_snapshot = env.get_smiles()                                              
             valid_r, uniq_r, div = tanimoto_diversity(smiles_snapshot)                      # Calculate validity, uniqueness, and diversity metrics for the current batch of generated molecules.
 
-            best_r, best_s = topk.best()                                                    # Retrieve the historical high-water mark for strictly informational logging
+            best_r, best_s = topk.best()                                                    # Retrieve the reward and corresponding SMILES string from the best molecule found so far.
 
-            # Explained variance (EV) of the value function predictions: how well the critic network
-            # is fitting the returns, or equivalently on predicting the future reward, with max=1.0.
+            # Explained variance (EV) of the value function predictions: how well the critic 
+            # network is fitting the returns (predicts the future reward), with max=1.0.
             with torch.no_grad():                                                           
                 # "Ground truth": the actual discounted cumulative rewards the agent ended up collecting during the episode.
                 y_true = buffer.returns                                                     # Bind true cumulative returns vector for EV check
                 # "Predictions": the value estimates produced by the critic network for each state in the buffer.
                 y_pred = buffer.values                                                      # Bind base network predictions vector for EV check
-                # Compute the explained variance (EV): which expresses how much of the variance in the true returns is captured by the predicted values.
+                # Compute the explained variance (EV): How much of the variance in the true returns is captured by the predicted values.
                 ev = 1.0 - torch.var(y_true - y_pred) / (torch.var(y_true) + 1e-8)          # Mathematically solve the standard Explained Variance fraction
                 ev = float(ev.item())                                                       # Extract safely to python primitive
 
@@ -791,8 +813,9 @@ def train():
                     "affinity/uncertainty_mean": s2_aff_unc,                                # Stage-2: mean ensemble uncertainty (epistemic) of terminated molecules
                     "affinity/term_mean": s2_aff_term,                                      # Stage-2: mean affinity reward term A after the uncertainty penalty
                     "diversity/penalty_mean": s2_div_pen,                                   # Stage-2: mean Tanimoto-to-archive penalty D (0 novel .. 1 duplicate)
+                    "warhead/fraction": _meankey("warhead"),                                # Stage-3: fraction of terminal molecules containing a Michael-acceptor warhead
                 }                                                                           
-            )                                                                               # Terminate WandB POST operation
+            )                                                                               
             
             # Duplicate all metrics to the physical local textual file logger
             logger.log_step(                                                                

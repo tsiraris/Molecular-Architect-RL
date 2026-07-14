@@ -1,0 +1,6 @@
+# Stage-3 additional requirements (on top of Stage-1 + Stage-2)
+prolif                 # protein-ligand interaction fingerprints (oracle/interactions.py)
+MDAnalysis             # structure IO for ProLIF
+aizynthfinder          # retrosynthesis on the shortlist (retro/aizynth_shortlist.py) + its stock/policy files
+# gnina (covalent mode) is a binary; DiffDock-L/Boltz-2/OpenMM run in the physdock env via the bridge.
+# GFlowNet + active learning use only torch/PyG/rdkit already installed.
