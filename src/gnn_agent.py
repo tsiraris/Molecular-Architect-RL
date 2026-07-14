@@ -8,15 +8,15 @@ for de novo drug design. Its primary role is to ingest a 2D graph representation
 partially built molecule and output both a policy distribution (which chemical action to take next) 
 and a value estimate (how good the reward is expected to be for this molecular state).
 
-The architecture is a three-layer message-passing Graph Neural Network (GNN). 
+The architecture is a message-passing Graph Neural Network (GNN). 
 1. It begins with a GINEConv layer to maximize discriminative power over local chemical 
    environments by deeply integrating bond-type edge features.
 2. It follows with two layers of GATv2Conv (Graph Attention Network v2) to capture 
    long-range dependencies and route important information across the molecule.
 3. Node embeddings are then collapsed into a single global graph embedding via an 
    AttentionalAggregation pool, dynamically weighing the most "interesting" atoms.
-4. Finally, this graph vector is routed through twin MLP heads: an Actor (policy logits) 
-   and a Critic (state value). 
+4. Finally, this graph vector is routed through twin MLP heads: a 2-layer Actor (policy logits) 
+   and an upgraded 3-layer Critic (state value). 
 
 Note: the forward pass applies a dynamic safety mask using `torch.finfo.min` to 
 zero-out chemically invalid actions before softmax/sampling, ensuring numerical 
@@ -37,13 +37,15 @@ class MoleculeAgent(nn.Module):
     Inherits from `torch.nn.Module` and defines a shared GNN backbone (GINE + GATv2) 
     that learns topological and chemical representations of an RDKit graph. The shared 
     embedding is branched into an actor head to predict valid structural modifications 
-    and a critic head to estimate the expected future multi-parameter objective (MPO) reward.
+    and a deeper (3-layer) critic head to estimate the expected future multi-parameter 
+    objective (MPO) reward.
     
     Args:
         num_node_features (int): Dimensionality of the input node features (e.g., atom type, hybridization etc.)
         num_actions (int): Size of the flat discrete action space (stop, add, focus, ring).
         hidden_dim (int, optional): The base hidden dimensionality for message passing. Defaults to 64.
         edge_dim (int, optional): Dimensionality of the input edge features (e.g., bond type one-hot). Defaults to 4.
+        pocket_dim (int, optional): Dimensionality of the target-pocket embedding for FiLM conditioning. Defaults to 0.
         
     Example:
         >>> agent = MoleculeAgent(num_node_features=12, num_actions=119)
@@ -60,14 +62,16 @@ class MoleculeAgent(nn.Module):
         # Stage-2 Pocket Conditioning Setup
         # Instantiates the structural FiLM conditioning variables and registers the static pocket buffer.
         # -------------------------------------------------------------------------------------------------------------
-        self.pocket_dim = pocket_dim                                                                                # Dimensionality of the target-pocket embedding (0 disables conditioning)
-        self.film = None                                                                                            # FiLM module, built below only when pocket_dim > 0
+        self.pocket_dim = pocket_dim                                                                # Dimensionality of the target-pocket embedding (0 disables conditioning)
+        self.film = None                                                                            # FiLM module, built below only when pocket_dim > 0
+        
         # Register a persistent-free tensor buffer for the pocket vector to be stored in (not updated by backprop, not saved in the checkpoint)
         self.register_buffer("pocket_vec", torch.zeros(pocket_dim) if pocket_dim > 0 else torch.zeros(0), persistent=False) # Fixed single-target pocket vector, set via set_pocket()
+        
         # If pocket conditioning is enabled (pocket_dim > 0), register the FiLM module
-        if pocket_dim > 0:                                                                                          # Evaluate if pocket conditioning is enabled by checking if dimension is positive
-            from pocket.conditioning import FiLM                                                                    # Dynamically import the Feature-wise Linear Modulation module for conditioning
-            self.film = FiLM(pocket_dim, hidden_dim * 2)
+        if pocket_dim > 0:                                                                          # Evaluate if pocket conditioning is enabled by checking if dimension is positive
+            from pocket.conditioning import FiLM                                                    # Dynamically import the Feature-wise Linear Modulation module for conditioning
+            self.film = FiLM(pocket_dim, hidden_dim * 2)                                            # Initialize FiLM to modulate the aggregated graph embedding
         
         # -----------------------------------------------------------------------------------------
         # GRAPH ENCODER - Layer 1 (GINEConv)
@@ -89,9 +93,9 @@ class MoleculeAgent(nn.Module):
         # attention layers to capture long-range topological dependencies. GATv2Conv assigns learnable 
         # importance scores to identify how different sub-structures interact across the molecule.
         # --------------------------------------------------------------------------------------------
-        self.conv2 = GATv2Conv(hidden_dim, hidden_dim, heads=4, concat=True, edge_dim=edge_dim)          # Initialize 4-head attention layer (each "looking" for different chemical phenomena) where heads concatenate, resulting in a hidden_dim * 4 output size
+        self.conv2 = GATv2Conv(hidden_dim, hidden_dim, heads=4, concat=True, edge_dim=edge_dim)             # Initialize 4-head attention layer (each "looking" for different chemical phenomena) where heads concatenate, resulting in a hidden_dim * 4 output size
 
-        self.conv3 = GATv2Conv(hidden_dim * 4, hidden_dim * 2, heads=2, concat=False, edge_dim=edge_dim) # Initialize refining attention layer, to average the large Layer-2 feature space with 2 heads (concat=False) into a final [num_nodes, hidden_dim * 2] shape
+        self.conv3 = GATv2Conv(hidden_dim * 4, hidden_dim * 2, heads=2, concat=False, edge_dim=edge_dim)    # Initialize refining attention layer, to average the large Layer-2 feature space with 2 heads (concat=False) into a final [num_nodes, hidden_dim * 2] shape
         
         # ---------------------------------------------------------------------------------------------------------
         # GLOBAL POOLING (Attentional Aggregation):
@@ -119,10 +123,13 @@ class MoleculeAgent(nn.Module):
         # CRITIC HEAD ("Estimates how good the current state is" - Value estimation)
         # Predicts the expected final MPO reward from this state.
         # Decodes the global graph embedding into a single scalar representing expected future reward.
+        # Upgraded to a 3-layer MLP for Stage-3 to boost explained variance capacity.
         # --------------------------------------------------------------------------------------------
-        self.critic = nn.Sequential(                                                                # Initialize the Critic multi-layer perceptron as a sequential block
+        self.critic = nn.Sequential(                                                                # Initialize the Critic multi-layer perceptron (upgraded to 3 layers for Stage-3)
             nn.Linear(hidden_dim * 2, hidden_dim),                                                  # Down-project the same pooled graph embedding into the base hidden dimensionality
             nn.ReLU(),                                                                              # Apply a non-linear ReLU activation function for the value estimator
+            nn.Linear(hidden_dim, hidden_dim),                                                      # Add an extra hidden-to-hidden layer to give the critic more representational power, lifting explained variance
+            nn.ReLU(),                                                                              # Apply a second ReLU activation before the final scalar projection
             nn.Linear(hidden_dim, 1)                                                                # Map the hidden representation linearly to a single scalar value estimating the current state's worth
         )                                                                                           
 
@@ -152,15 +159,17 @@ class MoleculeAgent(nn.Module):
         # Pocket Vector Installation
         # Validates and stores the target condition vector into the model's registered buffer.
         # ----------------------------------------------------------------------------------------------------
-        if self.pocket_dim <= 0:                                                                                    # Check if the network was initialized without pocket conditioning (Stage-1 mode)
-            return                                                                                                  # Safe no-op if conditioning is disabled, immediately returning without state modification
-        import numpy as _np                                                                                         # Import numpy strictly locally to process standard python arrays or iterables
+        if self.pocket_dim <= 0:                                                                    # Check if the network was initialized without pocket conditioning (Stage-1 mode)
+            return                                                                                  # Safe no-op if conditioning is disabled, immediately returning without state modification
+        import numpy as _np                                                                         # Import numpy strictly locally to process standard python arrays or iterables
+        
         # If conditioning is enabled, convert the incoming protein pocket vector to a PyTorch tensor
-        t = torch.as_tensor(_np.asarray(vec), dtype=torch.float32)                                                  # Cast the incoming numerical collection into a strict PyTorch 32-bit floating point tensor
+        t = torch.as_tensor(_np.asarray(vec), dtype=torch.float32)                                  # Cast the incoming numerical collection into a strict PyTorch 32-bit floating point tensor
+        
         # If the vector length matches the architecture's expected dimension size, save the tensor to 
         # the model's buffer, else raise an assertion error
-        assert t.numel() == self.pocket_dim, f"pocket vec dim {t.numel()} != pocket_dim {self.pocket_dim}"          # Validate the total element count matches the architecture's expected dimension size
-        self.pocket_vec = t
+        assert t.numel() == self.pocket_dim, f"pocket vec dim {t.numel()} != pocket_dim {self.pocket_dim}"      # Validate the total element count matches the architecture's expected dimension size
+        self.pocket_vec = t                                                                                     # Assign the verified tensor to the module's persistent buffer
 
     def forward(self, x, edge_index, edge_attr, batch, action_mask=None):
         """
@@ -216,8 +225,8 @@ class MoleculeAgent(nn.Module):
         # Before it reaches the actor/critic heads, modulate the graph embedding of each molecule by the (fixed) target-pocket vector via FiLM (output = graph_emb * (1 + gamma) + beta). 
         # No-op when pocket conditioning is disabled, preserving exact Stage-1 behaviour.
         # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-        if self.film is not None and self.pocket_vec.numel() > 0:                                                   # Ensure the FiLM module is initialized and the pocket buffer possesses actual data points
-            graph_embedding = self.film(graph_embedding, self.pocket_vec.to(graph_embedding.device))                # Per-feature scale/shift conditioned on the pocket
+        if self.film is not None and self.pocket_vec.numel() > 0:                                       # Ensure the FiLM module is initialized and the pocket buffer possesses actual data points
+            graph_embedding = self.film(graph_embedding, self.pocket_vec.to(graph_embedding.device))    # Per-feature scale/shift conditioned on the pocket
         
         action_logits = self.actor(graph_embedding)                                                 # Pass the global graph embedding through the Actor MLP to compute raw action selection logits
         state_value = self.critic(graph_embedding)                                                  # Pass the global graph embedding through the Critic MLP to compute the baseline state value

@@ -11,23 +11,34 @@ __pycache__/
 
 # Weights & Biases (generated)
 wandb/
-wandb-debug.log
-wandb-debug-internal.log
+wandb-debug*.log
 
-# Model artifacts / checkpoints
+# Model artifacts / checkpoints (regenerable, large)
 checkpoints/
 artifacts/
 *.pt
 *.pth
 *.ckpt
 
-# Archives
-*.zip
+# Data artifacts (regenerable: ChEMBL pull, merged set, pocket vector, target structures)
+data/*.csv
+data/kras/
+*.npy
 
-# Temporary files
-*.tmp
-*.doc
+# Docking poses (regenerable intermediate output)
+results/poses/
+
+# Archives / big binaries
+*.zip
+*.tgz
+
+# Office/docs kept out of GitHub (docx summary lives outside the repo)
 *.docx
+*.doc
 *.xml
+
+# Markdown: keep README + the results writeup, ignore scratch notes
 *.md
 !README.md
+!STAGE2_RESULTS.md
+!STAGE1_MASTER_REFERENCE.md

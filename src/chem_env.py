@@ -16,7 +16,10 @@ legal moves, ensuring the policy never proposes physically impossible chemistry 
 waste compute or crash RDKit. The environment also provides a robust 
 reward system using a multi-parameter objective (MPO) that guides the agent toward 
 drug-like topologies by penalizing structural alerts and constraining descriptors like 
-QED, MW, logP, TPSA, and Bertz complexity.
+QED, MW, logP, TPSA, and Bertz complexity. 
+
+In Stage 3, the environment is further upgraded to support Targeted Covalent Inhibitor (TCI) 
+design by detecting specific covalent warheads and passing a bonus flag to the reward combiner.
 """
 
 import math
@@ -28,6 +31,7 @@ from rdkit import Chem
 from rdkit.Chem import Crippen, Descriptors, GraphDescriptors, Lipinski, QED, rdMolDescriptors
 from reward.synth_gate import synth_gate, BANNED_PENALTY   # Stage-1 synthesizability gate
 from reward.composite import combine as _combine_reward, default_reward_cfg as _default_reward_cfg  # Stage-2 affinity+diversity combiner
+from reward.warhead import has_warhead                                                              # Stage-3: import warhead detection logic for targeted covalent inhibitor design
 
 # -----------------------------------------------------------------------------------------
 # Global Structural Alerts
@@ -375,8 +379,8 @@ class MoleculeEnvironment:
             complexity of the terminal reward function. Defaults to 0.0.
             
         Returns:
-            Tuple: Contains the new observation tuple, a float reward, a boolean done flag, 
-            and a dictionary of step metadata.
+            Tuple: Contains the new observation tuple, a float reward depending the action, 
+            a boolean done or not flag, and a dictionary of step metadata ("invalid_action", "terminated").
             
         Example:
             >>> env = MoleculeEnvironment(torch.device("cpu"))
@@ -606,11 +610,14 @@ class MoleculeEnvironment:
         and the full MPO objective via a linear curriculum, and scales the result by a soft 
         synthesizability multiplier.
         
+        In Stage 3, it also optionally detects the presence of a specific covalent warhead and 
+        applies a reward bonus to encourage the generation of targeted covalent inhibitors.
+        
         Args:
             curriculum_ratio (float): A scalar from 0.0 (early training) to 1.0 (late training).
             
         Returns:
-            float: The calculated terminal reward scalar, gated by synthetic realism.
+            float: The calculated terminal reward scalar, gated by synthetic realism and optional warhead modifiers.
             
         Example:
             >>> env = MoleculeEnvironment(torch.device("cpu"))
@@ -655,11 +662,17 @@ class MoleculeEnvironment:
             diversity_pen = self.diversity_archive.penalty(mol)                              # Mean Tanimoto to the rolling archive (0 novel .. 1 duplicate)
             # Add the current molecule's fingerprint to the archive
             self.diversity_archive.add(mol)                                                  # Register this molecule so future ones are compared against it
-        # Final Stage-2 composite reward and info dict (P, A, D, aff_hat_z, aff_unc_z)
+        
+        # Optional Warhead Flag: If the molecule contains a warhead and the reward config specifies to use it, apply a bonus.
+        wh = 1.0 if (self.reward_cfg.get("use_warhead") and has_warhead(mol)) else 0.0      # Evaluate if the generated topology contains a valid covalent warhead motif
+
+        # Final Stage-2/3 composite reward and info dict (P, A, D, aff_hat_z, aff_unc_z, warhead)
         reward, info = _combine_reward(base, soft, curriculum_ratio, self.reward_cfg,        # Weighted gate x property x affinity(-beta*unc) x diversity combiner
-                                       aff_hat_z=aff_hat_z, aff_unc_z=aff_unc_z, diversity_pen=diversity_pen)
+                                       aff_hat_z=aff_hat_z, aff_unc_z=aff_unc_z,
+                                       diversity_pen=diversity_pen, warhead_pen=wh)          # Stage-3: pass the pre-computed warhead flag so combine() credits the bonus correctly
         self.last_reward_info = info                                                         # Stash diagnostics (P, A, D, aff_hat_z, aff_unc_z) for the trainer to log
-        return reward                                                                        # Return the Stage-2 composite terminal reward (== base*soft when affinity/diversity off)
+        self.last_reward_info["warhead"] = wh                                                # Stage-3: also store the raw warhead flag (0.0|1.0) for per-step logging in train_rl.py
+        return reward                                                                        # Return the Stage-3 composite terminal reward
 
     def _safe_qed(self) -> float:
         """

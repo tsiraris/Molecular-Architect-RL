@@ -186,7 +186,8 @@ class PPOBuffer:
             value estimates for the states immediately following the end of the rollouts.
         
         Returns:
-            None.
+            None. But updates the buffer's attributes: `self.states`, `self.actions`, `self.rewards`,
+            `self.dones`, `self.log_probs`, `self.values`, `self.advantages`, and `self.returns` with finalized tensors.
             
         Example:
             >>> buffer = PPOBuffer(torch.device("cpu"), 1)
@@ -211,10 +212,10 @@ class PPOBuffer:
         all_actions, all_rewards, all_dones, all_logps, all_vals = [], [], [], [], []       # Initialize multiple empty lists to collect scalars for actions, rewards, dones, logps, and values
         all_advs, all_rets = [], []                                                         # Initialize empty lists specifically for the computed advantages and returns
 
-        # ---------------------------------------------------------------------------------
+        # ------------------------------------------------------------------------------------
         # Per-Environment GAE Computation
-        # Iterate backwards through each sequence to compute cumulative advantage.
-        # ---------------------------------------------------------------------------------
+        # Iterate over each environment's trajectory backwards, calculating TD errors and GAE.
+        # ------------------------------------------------------------------------------------
         for e in range(self.num_envs):                                                      # Compute GAE per env - Loop explicitly through every parallel environment index
             traj = self._traj[e]                                                            # Extract the specific list of Transition objects logged for this environment
             if len(traj) == 0:                                                              # Check if the trajectory is completely empty (e.g., if env skipped collection)

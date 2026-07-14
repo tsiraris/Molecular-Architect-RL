@@ -130,8 +130,9 @@ class VectorMoleculeEnv:
             curriculum_ratio (float, optional): The phase multiplier for the reward function.
             
         Returns:
-            Tuple: Contains a list of next states (Data objects), a tensor of float rewards, 
-            a tensor of float done flags, and a list of info dictionaries.
+            Tuple: For each environment, contains a list of next graph states/observations 
+            (Data objects), a tensor of float rewards depending on the actions taken, a tensor
+            of float done flags, and a list of info dictionaries ("invalid_action", "terminated").
             
         Example:
             >>> vec_env = VectorMoleculeEnv(2, torch.device('cpu'))
