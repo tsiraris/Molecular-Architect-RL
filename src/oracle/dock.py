@@ -1,9 +1,9 @@
 """
-==========================
-Docking Oracle (Stage-2/3)
-==========================
+======================================
+Stage-2 Oracle for Real Batch Docking
+======================================
 
-This module provides the expensive ground-truth / dense-label engine of the pipeline. It performs real 
+This module provides the expensive ground-truth / dense-label engine of Stage 2. It performs real 
 batch docking against a specified receptor pocket (e.g., the KRAS box) using external tools. 
 The preferred engine is `gnina` (CNN-rescored, GPU-accelerated), but it falls back to `smina` 
 or `AutoDock Vina`. 
@@ -12,11 +12,11 @@ Role in the Pipeline:
 Because generating 3D coordinates and running 3D CNNs takes seconds to minutes per molecule, it is mathematically 
 impossible to run this inside the RL agent's inner training loop (which needs to evaluate tens of thousands of molecules rapidly). 
 Therefore, this script is used strategically off the "hot path" in two specific bursts:
-1. Generating Training Data: Before RL begins, this script docks a massive library of 50k random 
-   molecules to generate the training labels needed to build the fast, PyG 2D surrogate model.
-2. Final Validation: After the RL agent finishes training, this script is used to definitively test
-   the agent's top-K elite generated molecules to prove that the agent actually designed good 
-   KRAS G12C binders, rather than just tricking the 2D surrogate model.
+1.	Generating Training Data: Before RL begins, this script docks a massive library of 50k random 
+    molecules to generate the training labels needed to build the fast, PyG 2D surrogate model.
+2.	Final Validation: After the RL agent finishes training, this script is used to definitively test
+    the agent's top-K elite generated molecules to prove that the agent actually designed good 
+    KRAS G12C binders, rather than just tricking the 2D surrogate model.
 
 Data Extraction:
 Results are primarily read from the output SDF properties, which is the most robust method. 
@@ -36,7 +36,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed                             # Stage-3 accel: fan smina CPU docks across all vCPUs (docks are independent + seed-locked)
 from dataclasses import asdict, dataclass
 from functools import partial
 from typing import List, Optional
@@ -45,7 +45,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 
-@dataclass                                                                                          # Dataclass decorator to auto-generate init, repr, and eq methods for clean data storage
+@dataclass                                                                                  # Dataclass decorator to auto-generate init, repr, and eq methods for clean data storage
 class DockResult:
     """
     A unified data structure to store the outcomes of a single molecule's docking simulation.
@@ -72,12 +72,12 @@ class DockResult:
     # Docking Result Fields
     # Define the required and optional data tracking fields for a given compound.
     # -----------------------------------------------------------------------------------------
-    smiles: str                                                                                     # The 1D chemical sequence string that was submitted for docking
-    affinity: Optional[float] = None                                                                # minimizedAffinity / Vina score (kcal/mol, lower=better)
-    cnn_affinity: Optional[float] = None                                                            # gnina CNNaffinity (predicted pKd, higher=better)
-    cnn_score: Optional[float] = None                                                               # gnina CNNscore (pose confidence 0..1)
-    pose_sdf: Optional[str] = None                                                                  # path to best-pose SDF when keep_pose_dir given
-    ok: bool = False                                                                                # Boolean status flag indicating whether valid scores were retrieved
+    smiles: str                                                                             # The 1D chemical sequence string that was submitted for docking
+    affinity: Optional[float] = None                                                        # minimizedAffinity / Vina score (kcal/mol, lower=better)
+    cnn_affinity: Optional[float] = None                                                    # gnina CNNaffinity (predicted pKd, higher=better)
+    cnn_score: Optional[float] = None                                                       # gnina CNNscore (pose confidence 0..1)
+    pose_sdf: Optional[str] = None                                                          # path to best-pose SDF when keep_pose_dir given
+    ok: bool = False                                                                        # Boolean status flag indicating whether valid scores were retrieved
 
 
 def which_engine(preferred: str = "gnina") -> Optional[str]:
@@ -97,16 +97,16 @@ def which_engine(preferred: str = "gnina") -> Optional[str]:
     Example:
         >>> exe = which_engine("gnina")
         >>> print(exe)
-        'gnina'
+        'gnina' # (assuming gnina is installed and in PATH)
     """
     # -----------------------------------------------------------------------------------------
     # Executable Resolution
     # Construct an ordered search list and check the system environment for the binaries.
     # -----------------------------------------------------------------------------------------
-    for exe in ([preferred] + [e for e in ("gnina", "smina", "vina") if e != preferred]):           # Build an ordered search list starting with the preferred binary, appending the remaining fallbacks
-        if shutil.which(exe):                                                                       # Check if the current executable name resolves to a valid binary in the system's PATH
-            return exe                                                                              # Return the exact name of the first successfully located binary
-    return None                                                                                     # Return None if neither the preferred nor fallback engines are installed
+    for exe in ([preferred] + [e for e in ("gnina", "smina", "vina") if e != preferred]):   # Build an ordered search list starting with the preferred binary, appending the remaining fallbacks
+        if shutil.which(exe):                                                               # Check if the current executable name resolves to a valid binary in the system's PATH
+            return exe                                                                      # Return the exact name of the first successfully located binary
+    return None                                                                             # Return None if neither the preferred nor fallback engines are installed
 
 
 def embed3d(smi: str, seed: int = 0xf00d):
@@ -142,7 +142,17 @@ def embed3d(smi: str, seed: int = 0xf00d):
     # Generate 3D coordinates using the ETKDGv3 algorithm, falling back to the older ETKDG method (if EmbedMolecule fails)
     if AllChem.EmbedMolecule(m, params) != 0:                                               # Attempt to generate 3D coordinates; EmbedMolecule returns 0 upon absolute success
         if AllChem.EmbedMolecule(m, AllChem.ETKDG()) != 0:                                  # If v3 fails (often on highly strained systems), fallback to the older, more permissive ETKDG algorithm
-            return None                                                                     # Return None if the molecule fundamentally cannot be embedded into 3D space
+            # MACROCYCLE RESCUE: distance-geometry embedding fails routinely on large macrocyclic
+            # ligands -- which is every real KRAS G12C drug in the ChEMBL reference set (45-60 heavy
+            # atoms). Random-coordinate initialisation with many attempts is the standard remedy and
+            # is strictly additive: it only runs where the code above already gave up.
+            p3 = AllChem.ETKDGv3(); p3.randomSeed = seed                                    # Fresh parameter set seeded identically for determinism
+            p3.useRandomCoords = True                                                       # Start from random coordinates instead of the failed distance-geometry guess
+            p3.maxIterations = 2000                                                         # Give the embedder room to converge on a strained ring system
+            if AllChem.EmbedMolecule(m, p3) != 0:                                           # Third attempt: random coordinates under ETKDGv3
+                if AllChem.EmbedMolecule(m, randomSeed=seed, useRandomCoords=True,
+                                         maxAttempts=200) != 0:                             # Final attempt: bare embedder, many restarts
+                    return None                                                             # Only now is the molecule genuinely un-embeddable
     # If 3D coordinates were successfully generated, gently minimize the structure using the MMFF force field
     try:                                                                                    # Wrap the physical force-field minimization in a try block as it can occasionally diverge
         AllChem.MMFFOptimizeMolecule(m)                                                     # Perform a brief local geometry relaxation using the Merck Molecular Force Field (MMFF)
@@ -172,18 +182,20 @@ def _floatprop(mol, *names):
         >>> m = Chem.MolFromSmiles("C")
         >>> m.SetProp("affinity", "-9.5")
         >>> val = _floatprop(m, "minimizedAffinity", "affinity")
+        >>> print(val)
+        -9.5
     """
     # --------------------------------------------------------------------------------------------
     # Robust Property Extraction
     # Search the molecule's property dictionary for specific keys and cast them securely to float.
     # --------------------------------------------------------------------------------------------
-    for n in names:                                                                                 # Iterate sequentially through the variable arguments containing target property string keys
-        if mol.HasProp(n):                                                                          # Ask the RDKit molecule object if it contains a property mapping for the current key
-            try:                                                                                    # Open a try block to handle potential ValueError failures during type coercion
-                return float(mol.GetProp(n))                                                        # Retrieve the raw string property from the molecule and cast it to a floating point decimal
-            except ValueError:                                                                      # Catch the exception triggered if the extracted property string is not a valid numerical representation
-                continue                                                                            # Ignore the failure and proceed to check the next alternative key in the provided names list
-    return None                                                                                     # Yield None if all provided keys were either missing or contained completely non-numeric data
+    for n in names:                                                                         # Iterate sequentially through the variable arguments containing target property string keys
+        if mol.HasProp(n):                                                                  # Ask the RDKit molecule object if it contains a property mapping for the current key
+            try:                                                                            # Open a try block to handle potential ValueError failures during type coercion
+                return float(mol.GetProp(n))                                                # Retrieve the raw string property from the molecule and cast it to a floating point decimal
+            except ValueError:                                                              # Catch the exception triggered if the extracted property string is not a valid numerical representation
+                continue                                                                    # Ignore the failure and proceed to check the next alternative key in the provided names list
+    return None                                                                             # Yield None if all provided keys were either missing or contained completely non-numeric data
 
 
 def _parse_sdf(out_sdf: str) -> DockResult:
@@ -199,26 +211,29 @@ def _parse_sdf(out_sdf: str) -> DockResult:
         
     Returns:
         DockResult: A populated dataclass containing the metrics. 'ok' is True if metrics exist.
+        
+    Example:
+        >>> result = _parse_sdf("output.sdf")
     """
     # --------------------------------------------------------------------------------------------------------------------------------------
     # SDF Metadata Parsing
     # Open the structural (SDF) file generated by the docking engine, extract the leading conformer (top pose), and read its embedded tags.
     # --------------------------------------------------------------------------------------------------------------------------------------
-    res = DockResult(smiles="")                                                                     # Initialize an empty DockResult container struct ready to be populated
-    if not os.path.exists(out_sdf) or os.path.getsize(out_sdf) == 0:                                # Verify the target SDF file physically exists on the disk and is not completely empty
-        return res                                                                                  # Return the blank result container immediately if the file is missing or corrupted
+    res = DockResult(smiles="")                                                             # Initialize an empty DockResult container struct ready to be populated
+    if not os.path.exists(out_sdf) or os.path.getsize(out_sdf) == 0:                        # Verify the target SDF file physically exists on the disk and is not completely empty
+        return res                                                                          # Return the blank result container immediately if the file is missing or corrupted
     # Starting from the best valid conformer (best pose put on the top) of the SDF file, 
     # extract the minimized affinity and CNN metrics (pKd and confidence score).
-    for mol in Chem.SDMolSupplier(out_sdf, sanitize=False):                                         # Instantiate a lazy RDKit SDF reader to iterate over the generated pose conformers without re-sanitizing
-        if mol is None:                                                                             # Check if the specific pose block failed to parse structurally
-            continue                                                                                # Skip this broken pose block and evaluate the next conformer in the SDF file
-        res.affinity = _floatprop(mol, "minimizedAffinity", "minimized_affinity")                   # Extract the standard thermodynamic affinity relying on common naming conventions
-        res.cnn_affinity = _floatprop(mol, "CNNaffinity", "CNN_VS")                                 # Extract the deep learning predicted pKd metric natively injected by gnina
-        res.cnn_score = _floatprop(mol, "CNNscore", "CNN_pose_score")                               # Extract the deep learning pose confidence proxy score natively injected by gnina
-        res.ok = res.affinity is not None or res.cnn_affinity is not None                           # Set the operational success flag to true if at least one critical metric was successfully extracted
-        break                                                                                       # Terminate the loop immediately after processing the first valid pose (which is natively sorted as the best)
+    for mol in Chem.SDMolSupplier(out_sdf, sanitize=False):                                 # Instantiate a lazy RDKit SDF reader to iterate over the generated pose conformers without re-sanitizing
+        if mol is None:                                                                     # Check if the specific pose block failed to parse structurally
+            continue                                                                        # Skip this broken pose block and evaluate the next conformer in the SDF file
+        res.affinity = _floatprop(mol, "minimizedAffinity", "minimized_affinity")           # Extract the standard thermodynamic affinity relying on common naming conventions
+        res.cnn_affinity = _floatprop(mol, "CNNaffinity", "CNN_VS")                         # Extract the deep learning predicted pKd metric natively injected by gnina
+        res.cnn_score = _floatprop(mol, "CNNscore", "CNN_pose_score")                       # Extract the deep learning pose confidence proxy score natively injected by gnina
+        res.ok = res.affinity is not None or res.cnn_affinity is not None                   # Set the operational success flag to true if at least one critical metric was successfully extracted
+        break                                                                               # Terminate the loop immediately after processing the first valid pose (which is natively sorted as the best)
     # Return the populated dataclass containing the extracted SDF metrics
-    return res                                                                                      # Return the populated dataclass containing the extracted SDF metrics
+    return res                                                                              
 
 
 def _parse_stdout(text: str) -> DockResult:
@@ -233,7 +248,9 @@ def _parse_stdout(text: str) -> DockResult:
         text (str): The raw terminal output generated by the docking subprocess.
         
     Returns:
-        DockResult: A populated dataclass containing the scraped metrics ("affinity", "cnn_affinity", "cnn_score", "ok").
+        DockResult: A populated dataclass containing the scraped metrics: `affinity`, `cnn_affinity`, `cnn_score`, and `ok`.
+        
+        
     Example:
         >>> result = _parse_stdout("REMARK VINA RESULT: -8.4")
         >>> print(result.affinity)
@@ -287,21 +304,33 @@ def dock_smiles(smi: str, receptor: str, center, box=(22, 22, 22), engine: str =
         keep_pose_dir (Optional[str], optional): Directory to save the final pose. Defaults to None.
         
     Returns:
-        DockResult: The parsed results containing ligand's SMILES, thermodynamic affinities (and CNN scores), and success flags.
+        DockResult: The parsed results containing affinities and success flags:
+                    - smiles: str - The 1D chemical sequence string that was submitted for docking
+                    - affinity: Optional[float] - minimizedAffinity / Vina score (kcal/mol, lower=better)
+                    - cnn_affinity: Optional[float] - gnina CNNaffinity (predicted pKd, higher=better)
+                    - cnn_score: Optional[float] - gnina CNNscore (pose confidence 0..1)
+                    - pose_sdf: Optional[str] - path to best-pose SDF when keep_pose_dir given
+                    - ok: bool - Boolean status flag indicating whether valid scores were retrieved from the output
+                    
+        Note: The `pose_sdf` field is only populated if `keep_pose_dir` is provided.
+        
+    Example:
+        >>> center = (10.0, 15.5, -2.0)
+        >>> res = dock_smiles("CC", "kras.pdbqt", center)
     """
     # ---------------------------------------------------------------------------------------------------------------------------------------------------
-    # Pipeline Setup & Early Exits Locate the desired docking binary on the host system, initialize the dock result container with the target SMILES, 
+    # Pipeline Setup & Early Exits: Locate the desired docking binary on the host system, initialize the dock result container with the target SMILES, 
     # translate the SMILES into a 3D RDKit molecule, define the search space origin and bounding box dimensions, and prepare the isolated temp workspace.
     # ---------------------------------------------------------------------------------------------------------------------------------------------------
-    exe = which_engine(engine)                                                                      # Resolve the absolute path to the designated docking binary on the host system
-    res = DockResult(smiles=smi)                                                                    # Pre-initialize the final result container, seeding it with the target input sequence
-    if exe is None:                                                                                 # Validate that the requested docking binary was successfully located in the system PATH
-        return res                                                                                  # Abort gracefully, returning an unsuccessful DockResult if the binary is missing
-    m = embed3d(smi)                                                                                # Translate the 1D string into an optimized 3D coordinate-bearing RDKit molecule
-    if m is None:                                                                                   # Check if the graph embedding or conformer generation algorithms completely failed
-        return res                                                                                  # Abort gracefully, returning an unsuccessful DockResult as docking requires 3D coordinates
-    cx, cy, cz = center; sx, sy, sz = box                                                           # Unpack the spatial targeting tuples defining the search space origin and bounding dimensions
-    tmp = tempfile.mkdtemp()                                                                        # Provision a securely isolated temporary directory on the OS disk for intermediate file I/O
+    exe = which_engine(engine)                                                              # Resolve the absolute path to the designated docking binary on the host system
+    res = DockResult(smiles=smi)                                                            # Pre-initialize the final result container, seeding it with the target input sequence
+    if exe is None:                                                                         # Validate that the requested docking binary was successfully located in the system PATH
+        return res                                                                          # Abort gracefully, returning an unsuccessful DockResult if the binary is missing
+    m = embed3d(smi)                                                                        # Translate the 1D string into an optimized 3D coordinate-bearing RDKit molecule
+    if m is None:                                                                           # Check if the graph embedding or conformer generation algorithms completely failed
+        return res                                                                          # Abort gracefully, returning an unsuccessful DockResult as docking requires 3D coordinates
+    cx, cy, cz = center; sx, sy, sz = box                                                   # Unpack the spatial targeting tuples defining the search space origin and bounding dimensions
+    tmp = tempfile.mkdtemp()                                                                # Provision a securely isolated temporary directory on the OS disk for intermediate file I/O
     
     # ---------------------------------------------------------------------------------------------
     # Execution, Parsing, and Archiving: Write ligand to disk, form the CLI command for the engine
@@ -327,33 +356,31 @@ def dock_smiles(smi: str, receptor: str, center, box=(22, 22, 22), engine: str =
         # Execute the assembled CLI command process with a hard timeout, 
         # and parse the output SDF file if successful.
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)            # Synchronously execute the assembled CLI command, intercepting text streams, subject to a hard timeout
-        
         # Parse the output SDF file first, falling back to stdout regex if necessary
         # res now contains the extracted affinity metrics ("affinity", "cnn_affinity", "cnn_score" for gnina) 
         # and a success flag indicating if parsing succeeded
-        res = _parse_sdf(out)                                                                       # Prioritize parsing the rich metadata natively embedded inside the output SDF file
-        if not res.ok:                                                                              # Intervene if the SDF parser completely failed to retrieve any actionable thermodynamic metrics
-            res = _parse_stdout(r.stdout + "\n" + r.stderr)                                         # Execute the emergency fallback regex parser directly against the captured CLI text streams
-        
+        res = _parse_sdf(out)                                                               # Prioritize parsing the rich metadata natively embedded inside the output SDF file
+        if not res.ok:                                                                      # Intervene if the SDF parser completely failed to retrieve any actionable thermodynamic metrics
+            res = _parse_stdout(r.stdout + "\n" + r.stderr)                                 # Execute the emergency fallback regex parser directly against the captured CLI text streams
         # Re-apply the initial input SMILES string, and if the user has requested to keep the
         # spatial coordinates of the best pose (SDF file), copy them to the requested target directory.
-        res.smiles = smi                                                                            # Re-apply the initial input SMILES string ensuring the final result record is fully contextualized
-        if res.ok and keep_pose_dir:                                                                # Check if docking succeeded and the user actively requested to retain the spatial coordinates
-            os.makedirs(keep_pose_dir, exist_ok=True)                                               # Ensure the target directory for saving poses actually exists on the disk
-            dst = os.path.join(keep_pose_dir, f"pose_{abs(hash(smi)) % (10**8)}.sdf")               # Construct a relatively unique filename derived from a truncated hash of the string sequence
-            try:                                                                                    # Wrap the file system copy operation defensively to prevent catastrophic pipeline failure
-                shutil.copy(out, dst); res.pose_sdf = dst                                           # Physically copy the output SDF out of the temporary folder and register its new absolute path
-            except Exception:                                                                       # Catch any arbitrary IO errors encountered while copying the file
-                pass                                                                                # Silently ignore the file system failure, abandoning the pose but preserving the numerical metrics
-        return res                                                                                  # Safely yield the fully populated DockResult container back to the caller
+        res.smiles = smi                                                                    # Re-apply the initial input SMILES string ensuring the final result record is fully contextualized
+        if res.ok and keep_pose_dir:                                                        # Check if docking succeeded and the user actively requested to retain the spatial coordinates
+            os.makedirs(keep_pose_dir, exist_ok=True)                                       # Ensure the target directory for saving poses actually exists on the disk
+            dst = os.path.join(keep_pose_dir, f"pose_{abs(hash(smi)) % (10**8)}.sdf")       # Construct a relatively unique filename derived from a truncated hash of the string sequence
+            try:                                                                            # Wrap the file system copy operation defensively to prevent catastrophic pipeline failure
+                shutil.copy(out, dst); res.pose_sdf = dst                                   # Physically copy the output SDF out of the temporary folder and register its new absolute path
+            except Exception:                                                               # Catch any arbitrary IO errors encountered while copying the file
+                pass                                                                        # Silently ignore the file system failure, abandoning the pose but preserving the numerical metrics
+        return res                                                                          # Safely yield the fully populated DockResult container back to the caller
     # If anything goes wrong with the physical I/O or process execution, catch the 
     # exception and return the initial empty result container.
-    except Exception:                                                                               # Catch any fatal structural errors ranging from subprocess timeouts to OS I/O failures
-        return res                                                                                  # Yield the initial empty (failed) result container signaling a complete pipeline crash
+    except Exception:                                                                       # Catch any fatal structural errors ranging from subprocess timeouts to OS I/O failures
+        return res                                                                          # Yield the initial empty (failed) result container signaling a complete pipeline crash
     # Regardless of success or failure, ensure the temporary working directory (tmp) is 
     # completely erased (including all intermediate files inside).
-    finally:                                                                                        # Ensure this critical cleanup block executes indiscriminately regardless of prior success or failure
-        shutil.rmtree(tmp, ignore_errors=True)                                                      # Violently recursively delete the temporary working directory and all intermediate files
+    finally:                                                                                # Ensure this critical cleanup block executes indiscriminately regardless of prior success or failure
+        shutil.rmtree(tmp, ignore_errors=True)                                              # Violently recursively delete the temporary working directory and all intermediate files
 
 
 def dock_many(smiles: List[str], receptor: str, center, box=(22, 22, 22), engine: str = "gnina",
@@ -361,7 +388,9 @@ def dock_many(smiles: List[str], receptor: str, center, box=(22, 22, 22), engine
     """
     A convenience wrapper to sequentially dock a batch of SMILES strings.
     
-    Delegates immediately to the fast, cached parallel implementation `dock_many_fast`.
+    Iterates over the provided list of SMILES and executes `dock_smiles` on each. 
+    If `progress` is True and the `tqdm` library is available, it wraps the iteration 
+    in a progress bar for CLI visibility.
     
     Args:
         smiles (List[str]): A list of target ligand SMILES strings.
@@ -375,10 +404,23 @@ def dock_many(smiles: List[str], receptor: str, center, box=(22, 22, 22), engine
         
     Returns:
         List[DockResult]: A list of parsed DockResult dataclasses corresponding to the inputs.
+        
+    Example:
+        >>> center = (10.0, 15.5, -2.0)
+        >>> batch = ["C", "CC", "CCC"]
+        >>> results = dock_many(batch, "kras.pdb", center, progress=False)
     """
     # -----------------------------------------------------------------------------------------
     # Batch Docking Orchestration
     # Wrap the single-molecule process in an iterable pipeline with optional CLI progress.
+    #
+    # Stage-3 acceleration: this convenience wrapper now delegates to `dock_many_fast`, which
+    # (a) short-circuits any (molecule, receptor, box, engine) tuple already present in the disk
+    # cache, and (b) fans the remaining CPU docks across every available core. Both changes are
+    # numerically inert — each dock is still seeded with `--seed 0` and computed identically — so
+    # results are bit-for-bit the same as the old sequential list comprehension, only far faster.
+    # The original serial implementation is preserved verbatim below under `_dock_many_serial`
+    # for reference and as a guaranteed-correct fallback.
     # -----------------------------------------------------------------------------------------
     return dock_many_fast(smiles, receptor, center, box=box, engine=engine,                         # Delegate to the cached, parallel batch driver (identical results, N-core speedup)
                           cnn_scoring=cnn_scoring, gpu=gpu, progress=progress)                      # Pass through all scoring configurations and CLI preferences
@@ -387,7 +429,7 @@ def dock_many(smiles: List[str], receptor: str, center, box=(22, 22, 22), engine
 def _dock_many_serial(smiles: List[str], receptor: str, center, box=(22, 22, 22), engine: str = "gnina",
                       cnn_scoring: str = "rescore", gpu: bool = True, progress: bool = True) -> List[DockResult]:
     """
-    The original, strictly sequential batch docker (old dock_many def), kept as a correctness reference / fallback).
+    The original, strictly sequential batch docker (kept as a correctness reference / fallback).
 
     Iterates the input list and calls `dock_smiles` once per molecule with no parallelism and no
     caching. Behaviourally identical to `dock_many_fast` run with a single worker and an empty cache.
@@ -437,10 +479,11 @@ def _dock_one_worker(smi: str, receptor: str, center, box, engine, cnn_scoring, 
         DockResult: The parsed docking result for this single molecule.
     """
     # OpenMP and MKL are only allowed to use one thread per worker process.
-    os.environ.setdefault("OMP_NUM_THREADS", "1")                                                   # Pin OpenMP to one thread per worker to prevent CPU oversubscription across the pool
-    os.environ.setdefault("MKL_NUM_THREADS", "1")                                                   # Pin MKL similarly so N docking processes stay on N cores rather than N*cores threads
-    # Returns a
-    return dock_smiles(smi, receptor, center, box, engine, cnn_scoring, gpu=gpu)                    # Delegate to the unchanged single-molecule pipeline and return its DockResult
+    os.environ.setdefault("OMP_NUM_THREADS", "1")                                           # Pin OpenMP to one thread per worker to prevent CPU oversubscription across the pool
+    os.environ.setdefault("MKL_NUM_THREADS", "1")                                           # Pin MKL similarly so N docking processes stay on N cores rather than N*cores threads
+    
+    # Returns the parsed DockResult for this single molecule
+    return dock_smiles(smi, receptor, center, box, engine, cnn_scoring, gpu=gpu)             
 
 
 def dock_many_fast(smiles: List[str], receptor: str, center, box=(22, 22, 22), engine: str = "gnina",
@@ -453,8 +496,9 @@ def dock_many_fast(smiles: List[str], receptor: str, center, box=(22, 22, 22), e
     tuple already docked under the same (receptor, box, engine, covalent) parameters is returned
     instantly from disk. The remaining, genuinely-new molecules are docked concurrently:
       - CPU engines (smina / vina): fanned across `n_workers` processes (default: all vCPUs), since
-        each dock is an independent, CPU-bound subprocess (~N-core speedup from a 16-vCPU ml.g5.4xlarge).
-      - GPU engine (gnina with gpu=True): kept sequential, because the single GPU is the shared
+        each dock is an independent, CPU-bound subprocess. This is where the ~N-times speedup comes
+        from on a 16-vCPU ml.g5.4xlarge.
+      - GPU engine (gnina with gpu=True): kept sequential, because the single A10G is the shared
         bottleneck and stacking processes on it would only thrash VRAM.
     Every dock remains seeded with `--seed 0`, so parallelism and caching change ONLY wall-clock
     time, never the returned scores or poses.
@@ -474,6 +518,11 @@ def dock_many_fast(smiles: List[str], receptor: str, center, box=(22, 22, 22), e
 
     Returns:
         List[DockResult]: Results aligned to the input order (cache hits + fresh docks merged).
+
+    Example:
+        >>> from oracle.cache import DockCache
+        >>> res = dock_many_fast(["CCO", "c1ccccc1"], "6oim.pdbqt", (10, 12, 8),
+        ...                       engine="smina", cache=DockCache("state/dock_cache.jsonl"))
     """
     # ------------------------------------------------------------------------------------------------------
     # Cache Pass: Before initiating any 3D docking, the orchestrator queries a local hash-mapped disk cache. 

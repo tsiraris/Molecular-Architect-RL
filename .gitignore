@@ -26,7 +26,8 @@ data/kras/
 *.npy
 
 # Docking poses (regenerable intermediate output)
-results/poses/
+results/stage 2 results/poses/
+results/stage 3 results/poses/
 
 # Archives / big binaries
 *.zip
@@ -37,8 +38,9 @@ results/poses/
 *.doc
 *.xml
 
-# Markdown: keep README + the results writeup, ignore scratch notes
+# Markdown: keep README + the results writeup, ignore scratch notes, and ignore the bibliography folder
 *.md
 !README.md
 !STAGE2_RESULTS.md
 !STAGE1_MASTER_REFERENCE.md
+Bibliography/
