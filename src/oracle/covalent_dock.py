@@ -26,7 +26,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict                                                              # Stage-3 accel: serialise DockResult -> dict for the disk cache (free repeats/resumes)
 from typing import List, Optional
 
 from rdkit import Chem
@@ -39,28 +39,56 @@ from reward.warhead import has_warhead
 # Define the specific functional group required for a molecule to be eligible for 
 # covalent docking against the target residue.
 # -----------------------------------------------------------------------------------------
-_LIG_WARHEAD_SMARTS = "[CH2]=[CH]C(=O)N"                                                    # The ligand atom pattern that forms the covalent bond: the terminal CH2 of an acrylamide Michael acceptor.
+_LIG_WARHEAD_SMARTS = "[CH2]=[CH]C(=O)N"                                                    # Default: acrylamide (sotorasib/adagrasib class)
+# Candidate attacking-atom patterns, ordered specific -> generic. The FIRST atom of each pattern is
+# the atom gnina bonds to Cys12-SG: for a Michael acceptor that is the terminal CH2 (the beta-carbon
+# the thiolate attacks). reward.warhead.has_warhead accepts a BROADER set than the single acrylamide
+# pattern previously hard-coded here, so vinyl ketones / generic enones were routed to covalent
+# docking with a SMARTS gnina could not match, and failed.
+_LIG_WARHEAD_CANDIDATES = [
+    "[CH2]=[CH]C(=O)N",                                                                     # Acrylamide
+    "[CH2]=[CH]C(=O)[#6]",                                                                  # Vinyl ketone
+    "[CH2]=[CH]S(=O)(=O)",                                                                  # Vinyl sulfonamide/sulfone
+    "[CH2]=[CH]C(=O)",                                                                      # Generic enone
+]
 
 
-def covalent_dock_smiles(smi: str, receptor: str, cys_spec: str = "A:12:SG",
+def _pick_warhead_smarts(mol):
+    """
+    Returns the most specific warhead SMARTS the molecule actually matches.
+
+    Args:
+        mol (Chem.Mol): The candidate ligand.
+
+    Returns:
+        str or None: A SMARTS whose first atom is the covalent-attacking carbon, or None if no
+        recognised Michael acceptor is present (in which case covalent docking cannot proceed).
+    """
+    for sm in _LIG_WARHEAD_CANDIDATES:                                                      # Specific patterns first so acrylamides keep their exact match
+        q = Chem.MolFromSmarts(sm)                                                          # Compile the candidate
+        if q is not None and mol.HasSubstructMatch(q):                                      # Does this ligand actually contain it?
+            return sm                                                                       # Use the pattern gnina can match
+    return None                                                                             # The ligand atom pattern that forms the covalent bond: the terminal CH2 of an acrylamide Michael acceptor.
+
+
+def covalent_dock_smiles(smi: str, receptor: str, cys_spec: str = "A:12:SG", autobox_ligand: str = None,
                          lig_smarts: str = _LIG_WARHEAD_SMARTS, engine: str = "gnina",
                          cnn_scoring: str = "rescore", timeout: int = 600,
                          keep_pose_dir: Optional[str] = None) -> DockResult:
     """
     Executes covalent docking for a single warhead-bearing molecule against a specified receptor.
     
-    Initializes a `DockResult` object that will be populated with "minimized affinity","CNNaffinity", 
-    and "CNNscore" metrics from gnina. Verifies the molecule can be parsed and contains the required warhead. 
+    Initializes a `DockResult` object (containing "minimized affinity","CNNaffinity", and "CNNscore" 
+    metrics from gnina). Verifies the molecule can be parsed and contains the required warhead. 
     Checks that the correct docking engine (`gnina`) is available. Generates a 3D conformation of
     the ligand, writes it to a temporary SDF, and invokes `gnina` via a subprocess with covalent 
     optimization flags. Parses the CNN scoring output and optionally saves the resulting 3D pose to disk.
-    Returns a `DockResult` dataclass for the ligand containing its SMILES, the docking success flag, gnina metrics 
-    ("minimized affinity", "CNNaffinity", "CNNscore"), and pose paths (optional).
     
     Args:
         smi (str): The SMILES string of the ligand to be docked.
         receptor (str): The file path to the receptor structure (e.g., PDB or PDBQT file).
         cys_spec (str, optional): The chain, residue number, and atom name of the target cysteine. Defaults to "A:12:SG".
+        autobox_ligand (str, optional): The ligand to use for autoboxing. Defaults to None.
         lig_smarts (str, optional): SMARTS pattern identifying the attacking atom pattern on the ligand. Defaults to _LIG_WARHEAD_SMARTS.
         engine (str, optional): The docking engine to use; must be "gnina" for covalent mode. Defaults to "gnina".
         cnn_scoring (str, optional): The gnina CNN scoring mode (e.g., "rescore"). Defaults to "rescore".
@@ -68,18 +96,16 @@ def covalent_dock_smiles(smi: str, receptor: str, cys_spec: str = "A:12:SG",
         keep_pose_dir (Optional[str], optional): Directory path to save successful docked pose SDFs. Defaults to None.
         
     Returns:
-        DockResult: A dataclass containing the ligand SMILES, docking success flag, gnina metrics 
-        ("minimized affinity", "CNNaffinity", "CNNscore"), and pose paths (optional).
+        DockResult: A dataclass containing the docking success flag, affinity score, CNN scores, and pose paths.
         
     Example:
         >>> smi = "C=CC(=O)Nc1ccccc1" # Example acrylamide
         >>> result = covalent_dock_smiles(smi, "kras_g12c_rec.pdb")
         >>> print(result.ok)
-        True
     """
     # -------------------------------------------------------------------------------------
-    # Pre-Docking Validation & Setup
-    # Validate the chemical structure, ensure warhead presence, and prepare 3D coordinates.
+    # Pre-Docking Validation & Setup: Validate the chemical structure, ensure warhead 
+    # presence, and prepare 3D coordinates of the ligand.
     # -------------------------------------------------------------------------------------
     res = DockResult(smiles=smi)                                                            # Initialize the standardized result container pre-loaded with the query SMILES
     mol = Chem.MolFromSmiles(smi)                                                           # Convert the input raw SMILES string into an RDKit Mol topological object
@@ -88,39 +114,46 @@ def covalent_dock_smiles(smi: str, receptor: str, cys_spec: str = "A:12:SG",
     exe = which_engine(engine)                                                              # Resolve the absolute system path to the requested docking engine executable
     if exe is None or exe != "gnina":                                                       # Verify the engine exists and is explicitly gnina, as this covalent mode is gnina-specific
         return res                                                                          # Abort and return the default failed result if the correct engine is unavailable
-    
-    m3d = embed3d(smi)                                                                      # Generate a minimized 3D conformation of the ligand using standard embedding heuristics
+    # Generate a 3D conformation of the ligand
+    m3d = embed3d(smi)                                                                      # Generate a minimized 3D conformer of the ligand using standard embedding heuristics
     if m3d is None:                                                                         # Check if the 3D embedding process failed (e.g., due to severe steric clashes)
         return res                                                                          # Return the failed result object since docking requires 3D coordinates
-    
-    tmp = tempfile.mkdtemp()                                                                # Create a secure, isolated temporary directory on the OS filesystem for staging I/O files
+    # Create a secure, isolated temporary directory on the OS filesystem for staging I/O files
+    tmp = tempfile.mkdtemp()                                                                
     try:                                                                                    # Wrap the filesystem and subprocess operations in a try block to ensure cleanup
         
-        # ---------------------------------------------------------------------------------
-        # I/O Staging and Engine Execution
-        # Write the ligand SDF to disk, build the command list with covalent flags, and run.
-        # ---------------------------------------------------------------------------------
+        # -------------------------------------------------------------------------------------
+        # I/O Staging and Engine Execution: Write the ligand SDF to disk, build the command 
+        # list to invoke gnina with covalent optimization flags, and execute the docking engine.
+        # -------------------------------------------------------------------------------------
         lig = os.path.join(tmp, "lig.sdf"); w = Chem.SDWriter(lig); w.write(m3d); w.close() # Define ligand path, open an RDKit SDWriter, serialize the 3D molecule to disk, and flush/close the writer
         out = os.path.join(tmp, "out.sdf")                                                  # Define the exact target file path where the docking engine should write the scored poses
+        _sm = _pick_warhead_smarts(m3d) or lig_smarts                                       # Derive the attacking-atom pattern from THIS molecule
         cmd = [exe, "-r", receptor, "-l", lig, "-o", out,                                   # Construct the base command list: executable, receptor flag, ligand flag, and output flag
                "--covalent_rec_atom", cys_spec,                                             # Append the gnina flag explicitly defining the receptor's target atom (e.g., Cys12 SG)
-               "--covalent_lig_atom_pattern", lig_smarts,                                   # Append the gnina flag providing the SMARTS pattern to identify the attacking ligand atom
+               "--covalent_lig_atom_pattern", _sm,                                          # Append the gnina flag providing the SMARTS pattern to identify the attacking ligand atom
                "--covalent_optimize_lig",                                                   # Append the gnina flag commanding it to physically model the covalent bond geometry
                "--cnn_scoring", cnn_scoring, "--seed", "0", "--num_modes", "3"]             # Append flags for CNN rescoring, deterministic random seeding, and limiting the output to top 3 modes
         
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)            # Execute the constructed command synchronously, capturing stdout/stderr as strings, enforcing the timeout
+        # Since every covalent dock failed silently due to a lack of a search space, we 
+        # provide the SMILES of the ligand to gnina. Then gnina derives the search space 
+        # (box) around it from the its crystallographic reference ligand.
+        if autobox_ligand:                                                                  # Derive the box from the crystallographic reference ligand
+            cmd += ["--autobox_ligand", autobox_ligand]                                     # gnina sizes the search space around the known pocket occupant
+        # Execute the constructed command synchronously, capturing stdout/stderr as strings, enforcing the timeout
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)            
         
         # ---------------------------------------------------------------------------------
         # Output Parsing and Pose Archiving
-        # Extract gnina metrics from the output files and save successful poses.
+        # Extract numerical scores from the output files and save successful poses.
         # ---------------------------------------------------------------------------------
         # Parse the generated output SDF file to extract CNN affinity, CNN score, and minimized energies
         res = _parse_sdf(out)                                                               
         if not res.ok:                                                                      # Check if the SDF parsing failed (usually implies the docking engine crashed or found no poses)
             res = _parse_stdout(r.stdout + "\n" + r.stderr)                                 # Attempt a fallback parsing directly from the engine's standard output and error streams
         res.smiles = smi                                                                    # Re-inject the original query SMILES string into the populated result object
-        
-        if res.ok and keep_pose_dir:                                                        # Archive the successful pose metrics SDF if requested in the user-specified directory
+        # Archive the successful pose metrics SDF if requested in the user-specified directory
+        if res.ok and keep_pose_dir:                                                        # Check if docking was completely successful and the user requested pose archiving
             os.makedirs(keep_pose_dir, exist_ok=True)                                       # Ensure the destination archive directory physically exists, creating it if necessary
             dst = os.path.join(keep_pose_dir, f"cov_{abs(hash(smi)) % (10**8)}.sdf")        # Construct a unique destination filename by hashing the SMILES string
             try:                                                                            # Wrap the file copy operation in an inner try block to avoid failing the whole run on I/O issues
@@ -134,13 +167,13 @@ def covalent_dock_smiles(smi: str, receptor: str, cys_spec: str = "A:12:SG",
         return res                                                                          
     finally:                                                                                # Ensure this block executes regardless of success, failure, or early returns
         # ---------------------------------------------------------------------------------
-        # Resource Cleanup
-        # Recursively delete the temporary staging directory to prevent disk bloat.
+        # Resource Cleanup: Recursively delete the temporary staging directory and all its 
+        # contents to prevent disk bloat.
         # ---------------------------------------------------------------------------------
-        shutil.rmtree(tmp, ignore_errors=True)                                              # Force-remove the temporary directory and all its contents, ignoring missing file errors
+        shutil.rmtree(tmp, ignore_errors=True)                                              
 
 
-def covalent_dock_many(smiles: List[str], receptor: str, cys_spec: str = "A:12:SG",
+def covalent_dock_many(smiles: List[str], receptor: str, cys_spec: str = "A:12:SG", autobox_ligand: str = None,
                        engine: str = "gnina", cnn_scoring: str = "rescore",
                        keep_pose_dir: Optional[str] = None, progress: bool = True,
                        cache=None) -> List[DockResult]:
@@ -151,8 +184,8 @@ def covalent_dock_many(smiles: List[str], receptor: str, cys_spec: str = "A:12:S
     progress bar for CLI feedback. Calls `covalent_dock_smiles` for each molecule, 
     aggregating the `DockResult` objects into a list.
 
-    Stage-3 acceleration: covalent docking is gnina-only and shares the single GPU, so unlike the 
-    non-covalent path it is not fanned across processes (stacking gnina on one GPU only thrashes
+    Stage-3 acceleration: covalent docking is gnina-only and shares the single A10G GPU, so unlike
+    the non-covalent path it is NOT fanned across processes (stacking gnina on one GPU only thrashes
     VRAM). Instead it consults an optional disk cache first — the covalent warhead set is small and
     heavily re-encountered across acquisition rounds and resumed sessions, so caching removes almost
     all redundant covalent docks at zero cost to accuracy (every dock is still seeded identically).
@@ -185,7 +218,7 @@ def covalent_dock_many(smiles: List[str], receptor: str, cys_spec: str = "A:12:S
     todo = []                                                                               # Collect (index, smiles) pairs that miss the cache and must actually be docked
     # Resolve cache hits (previously-computed identical covalent docks) 
     # up front so gnina is only ever invoked on genuinely-new warheads
-    for i, s in enumerate(smiles):                                                          
+    for i, s in enumerate(smiles):                                                          # Resolve cache hits up front so gnina is only ever invoked on genuinely-new warheads
         hit = cache.get(s, **key) if cache is not None else None                            # Probe the disk cache (returns None when caching is disabled or on a miss)
         if hit is not None:                                                                 # A hit is a previously-computed identical covalent dock
             results[i] = DockResult(**hit)                                                  # Rehydrate the stored dict back into a DockResult dataclass
@@ -209,12 +242,12 @@ def covalent_dock_many(smiles: List[str], receptor: str, cys_spec: str = "A:12:S
     # Iterate over the cache-misses, docking each one sequentially on the shared GPU, 
     # and storing the results in their original order
     for (i, s) in it:                                                                       # Dock each remaining warhead-bearing molecule one at a time on the GPU
-        res = covalent_dock_smiles(s, receptor, cys_spec, engine=engine, cnn_scoring=cnn_scoring, # Invoke the unchanged single-molecule covalent docking pipeline
+        res = covalent_dock_smiles(s, receptor, cys_spec, autobox_ligand=autobox_ligand, engine=engine, cnn_scoring=cnn_scoring, # Invoke the unchanged single-molecule covalent docking pipeline
                                    keep_pose_dir=keep_pose_dir)                             # Pass the common configuration arguments through verbatim
         results[i] = res                                                                    # Store the result in its order-preserving slot
         # If a disk cache is provided and the docking was successful, 
         # persist the result to disk for future reuse
         if cache is not None and res.ok:                                                    # Persist only successful covalent docks so failures can be retried on the next pass
-            cache.put(s, asdict(res), **key)                                                # Stage-3 accel: serialise DockResult -> dict for the disk cache (free repeats/resumes)
+            cache.put(s, asdict(res), **key)                                                # Write the covalent result through to the disk cache for future runs / resumes
     # Return the list of results, preserving the original input order and filling any gaps with default failure records
     return [r if r is not None else DockResult(smiles=smiles[i]) for i, r in enumerate(results)] 

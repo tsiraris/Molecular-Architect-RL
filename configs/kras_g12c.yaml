@@ -45,7 +45,7 @@ esm_pocket_embedding:  ../data/kras_g12c_pocket.npy                 # Destinatio
 # Sets the precise hyperparameters for the physics oracle (gnina) that acts as the target-aware reward function.
 # ------------------------------------------------------------------------------------------------------------------
 docking:                                                            # Defines the root configuration block for the scoring and pose-generation oracle.
-  engine: smina
+  engine: gnina
   cnn_scoring: rescore
   exhaustiveness: 8                                                 # The global search rigor. Higher values explore more thoroughly but exponentially increase Oracle wall-clock time per RL step.
   num_modes: 3                                                      # The maximum number of distinct binding poses (conformations) to output and score for each generated molecule.

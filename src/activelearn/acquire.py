@@ -132,7 +132,7 @@ def butina_pick(smiles: List[str], n_pick: int, cutoff: float = 0.65) -> List[in
             break                                                                           # Terminate the selection loop early if no more candidates exist
         # Return exactly the requested number of diverse representatives (n_pick), 
         # each from a different cluster, until all clusters are exhausted.
-        return picks[:n_pick]                                                               
+    return picks[:n_pick]                                                               
 
 
 def select_batch(smiles: List[str], mean_z: np.ndarray, unc_z: np.ndarray,

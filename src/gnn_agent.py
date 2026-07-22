@@ -8,7 +8,7 @@ for de novo drug design. Its primary role is to ingest a 2D graph representation
 partially built molecule and output both a policy distribution (which chemical action to take next) 
 and a value estimate (how good the reward is expected to be for this molecular state).
 
-The architecture is a message-passing Graph Neural Network (GNN). 
+The architecture is a three-layer message-passing Graph Neural Network (GNN). 
 1. It begins with a GINEConv layer to maximize discriminative power over local chemical 
    environments by deeply integrating bond-type edge features.
 2. It follows with two layers of GATv2Conv (Graph Attention Network v2) to capture 
@@ -16,7 +16,7 @@ The architecture is a message-passing Graph Neural Network (GNN).
 3. Node embeddings are then collapsed into a single global graph embedding via an 
    AttentionalAggregation pool, dynamically weighing the most "interesting" atoms.
 4. Finally, this graph vector is routed through twin MLP heads: a 2-layer Actor (policy logits) 
-   and an upgraded 3-layer Critic (state value). 
+   and, an upgraded between Stage 2 and 3, 3-layer Critic (state value). 
 
 Note: the forward pass applies a dynamic safety mask using `torch.finfo.min` to 
 zero-out chemically invalid actions before softmax/sampling, ensuring numerical 

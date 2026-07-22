@@ -20,6 +20,11 @@ This updated loop includes conditional wiring for the Stage-2 target-aware desig
 It can integrate a pre-trained `AffinityScorer` deep ensemble surrogate, a `DiversityArchive` 
 to penalize mode collapse via rolling Tanimoto checks, FiLM-based protein pocket conditioning 
 via pre-computed embeddings, and real-time Synthetic Accessibility (SA) score tracking.
+
+Stage-3 (Stability) Upgrades:
+Introduces Value-Target Standardization (via `RunningNorm`) and Huber Loss (Smooth L1) 
+to stabilize the critic network against the large magnitude rewards generated in late-stage 
+target-aware training.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import random
 from typing import Dict, List, Tuple
 import numpy as np
 import torch
+import torch.nn.functional as F                                                             # Import PyTorch functional API for loss functions like Huber loss (smooth_l1_loss)
 import torch.optim as optim
 import wandb
 from rdkit import Chem, DataStructs, RDLogger
@@ -90,7 +96,7 @@ CONFIG = {                                                                      
     # Defaults below reproduce the Stage-1 run exactly (affinity and diversity off). 
     # Flip use_affinity/use_diversity on for the Stage-2 experiment.
     # --------------------------------------------------------------------------------------------------------------
-    "use_affinity": True,                                                                      # Add the learned-surrogate affinity term to the terminal reward
+    "use_affinity": True,                                                                   # Add the learned-surrogate affinity term to the terminal reward
     "surrogate_dir": "../artifacts/surrogate_kras",                                         # Directory holding the trained deep ensemble + norm.json
     "w_property": 0.5,                                                                      # Weight on the 2D property term P (kept as a low prior when affinity is on)
     "w_affinity": 0.7,                                                                      # Weight on the affinity term A (ramped by the curriculum_ratio)
@@ -111,8 +117,8 @@ CONFIG = {                                                                      
     # Set True to add the Michael-acceptor bonus in reward/warhead.py.
     # Set False (default) for Stage-2 runs.
     # --------------------------------------------------------
-    "use_warhead": False,                                                                    # Toggle Michael-acceptor warhead bonus; True for Stage-3, False for Stage-1/2 backward compat
-    "w_warhead": 0.15,                                                                       # Bonus weight when use_warhead=True and the molecule has a warhead motif
+    "use_warhead": False,                                                                   # Toggle Michael-acceptor warhead bonus; True for Stage-3, False for Stage-1/2 backward compat
+    "w_warhead": 0.15,                                                                      # Bonus weight when use_warhead=True and the molecule has a warhead motif
 }                                                                                           
 
 def set_seed(seed: int) -> None:
@@ -132,7 +138,6 @@ def set_seed(seed: int) -> None:
     Example:
         >>> set_seed(42)
     """
-    
     # Random Seeding: Lock the pseudo-random number generators across all libraries.
     random.seed(seed)                                                                       # Fix the seed for Python's native random module operations
     np.random.seed(seed)                                                                    # Fix the seed for Numpy's numerical random generation routines
@@ -166,7 +171,7 @@ def tanimoto_diversity(smiles: List[str]) -> Tuple[float, float, float]:
     if not valid_idx:                                                                       # Check if the list of valid molecule indices is entirely empty
         return 0.0, 0.0, 0.0                                                                # If no valid molecules exist, safely return zeros for all diversity metrics
 
-    fps = [AllChem.GetMorganFingerprintAsBitVect(mols[i], 2, nBits=1024) for i in valid_idx]# Compute Morgan fingerprints for valid molecules (radius 2, 1024 bits) for similarity calculation
+    fps = [AllChem.GetMorganFingerprintAsBitVect(mols[i], 2, nBits=1024) for i in valid_idx] # Compute Morgan fingerprints for valid molecules (radius 2, 1024 bits) for similarity calculation
     sim = 0.0                                                                               # Initialize a running accumulator for the total pairwise Tanimoto similarity
     for i in range(len(fps)):                                                               # Iterate over every generated fingerprint via its index
         # Calculate similarities between the current fingerprint and the entire batch
@@ -227,7 +232,6 @@ def mol_props(smiles: str) -> Dict[str, float]:
         >>> props["rings"]
         1.0
     """
-    
     # Descriptor Profiling: Parse the SMILES string, convert to RDKit, and extract scalar physicochemical features.
     m = Chem.MolFromSmiles(smiles)                                                          # Parse the target SMILES string back into an active RDKit graph object
     if m is None:                                                                           # Check if the compilation failed due to valency or syntax errors
@@ -266,17 +270,17 @@ def _snapshot_sa(smiles_list):
         >>> type(avg_sa)
         <class 'float'>
     """
-    vals = []                                                                                   # Initialize an empty list to accumulate the successfully computed SA scores
+    vals = []                                                                               # Initialize an empty list to accumulate the successfully computed SA scores
 
     # Loop through the batch, parse SMILES strings into RDKit molecule objects, 
     # and compute individual SA scores for the valid ones.
-    for s in smiles_list:                                                                       # Iterate sequentially through each SMILES string provided in the input list
-        m = Chem.MolFromSmiles(s)                                                               # Attempt to parse the raw string sequence into a valid RDKit topological graph
-        if m is not None:                                                                       # Check if the string successfully compiled into a graph without valency errors
-            try:                                                                                # Wrap the scoring function in a try block to intercept complex heuristic failures
-                vals.append(_sascorer.calculateScore(m))                                        # Calculate the SA score using the fragment-based heuristic and append to list
-            except Exception:                                                                   # Catch any arbitrary exceptions thrown by the underlying C++ or Python scorer
-                pass                                                                            # Silently ignore the error and proceed to the next molecule in the batch
+    for s in smiles_list:                                                                   # Iterate sequentially through each SMILES string provided in the input list
+        m = Chem.MolFromSmiles(s)                                                           # Attempt to parse the raw string sequence into a valid RDKit topological graph
+        if m is not None:                                                                   # Check if the string successfully compiled into a graph without valency errors
+            try:                                                                            # Wrap the scoring function in a try block to intercept complex heuristic failures
+                vals.append(_sascorer.calculateScore(m))                                    # Calculate the SA score using the fragment-based heuristic and append to list
+            except Exception:                                                               # Catch any arbitrary exceptions thrown by the underlying C++ or Python scorer
+                pass                                                                        # Silently ignore the error and proceed to the next molecule in the batch
 
     # Compute the batch average, returning a safe NaN if the entire batch was invalid.
     return float(np.mean(vals)) if vals else float("nan")
@@ -523,44 +527,46 @@ def train():
     # ---------------------------------------------------------------------------------------------------
     
     # If enabled, build the affinity scorer and diversity archive
-    affinity_scorer = None                                                                          # Initialize the proxy scorer placeholder to None by default
-    if CONFIG["use_affinity"]:                                                                      # Check if the Stage-2 target-aware surrogate scoring flag is active
-        from surrogate.predict import AffinityScorer                                                # Imported lazily so Stage-1 runs need no surrogate present
-        affinity_scorer = AffinityScorer(CONFIG["surrogate_dir"], device=str(device))               # Load the trained deep ensemble + label-normalisation stats once
-        print(f"[stage2] affinity surrogate loaded from {CONFIG['surrogate_dir']}")                 # Echo the successful surrogate mounting to the terminal
+    affinity_scorer = None                                                                  # Initialize the proxy scorer placeholder to None by default
+    if CONFIG["use_affinity"]:                                                              # Check if the Stage-2 target-aware surrogate scoring flag is active
+        from surrogate.predict import AffinityScorer                                        # Imported lazily so Stage-1 runs need no surrogate present
+        affinity_scorer = AffinityScorer(CONFIG["surrogate_dir"], device=str(device))       # Load the trained deep ensemble + label-normalisation stats once
+        print(f"[stage2] affinity surrogate loaded from {CONFIG['surrogate_dir']}")         # Echo the successful surrogate mounting to the terminal
     
-    diversity_archive = None                                                                        # Initialize the Tanimoto archive placeholder to None by default
-    if CONFIG["use_diversity"]:                                                                     # Check if the Stage-2 rolling diversity penalty flag is active
-        from reward.composite import DiversityArchive                                               # Shared rolling Tanimoto archive across all envs
-        diversity_archive = DiversityArchive(maxlen=CONFIG["diversity_archive_size"])               # Instantiate the rolling buffer to track recently generated scaffolds
+    diversity_archive = None                                                                # Initialize the Tanimoto archive placeholder to None by default
+    if CONFIG["use_diversity"]:                                                             # Check if the Stage-2 rolling diversity penalty flag is active
+        from reward.composite import DiversityArchive                                       # Shared rolling Tanimoto archive across all envs
+        diversity_archive = DiversityArchive(maxlen=CONFIG["diversity_archive_size"])       # Instantiate the rolling buffer to track recently generated scaffolds
         print(f"[stage2] diversity penalty ON (archive={CONFIG['diversity_archive_size']}, w={CONFIG['w_diversity']})") # Echo the diversity penalty activation to the terminal
     
     # Assemble the reward-config dictionary for the env's composite combiner reads
-    reward_cfg = {                                                                                  # Mirror of composite.default_reward_cfg(), populated from CONFIG
-        "use_affinity": CONFIG["use_affinity"], "use_diversity": CONFIG["use_diversity"],           # Pass operational boolean flags down to the composite reward engine
-        "w_property": CONFIG["w_property"], "w_affinity": CONFIG["w_affinity"],                     # Pass numerical scalar weights defining the linear objective combination
-        "w_diversity": CONFIG["w_diversity"], "beta_uncertainty": CONFIG["beta_uncertainty"],       # Pass penalty coefficients for mode collapse and epistemic uncertainty
-        "reward_scale": CONFIG["reward_scale"], "property_ceiling": 12.0,                           # Pass final multiplication scalars to match gradient magnitudes
-        "use_warhead": CONFIG.get("use_warhead", False),                                            # Stage-3: thread warhead flag to chem_env._terminal_reward -> reward/warhead.py
-        "w_warhead": CONFIG.get("w_warhead", 0.15),                                                 # Stage-3: warhead bonus weight passed to reward/composite.combine()
-    }                                                                                               # Close the reward configuration dictionary
+    reward_cfg = {                                                                          # Mirror of composite.default_reward_cfg(), populated from CONFIG
+        "use_affinity": CONFIG["use_affinity"], "use_diversity": CONFIG["use_diversity"],   # Pass operational boolean flags down to the composite reward engine
+        "w_property": CONFIG["w_property"], "w_affinity": CONFIG["w_affinity"],             # Pass numerical scalar weights defining the linear objective combination
+        "w_diversity": CONFIG["w_diversity"], "beta_uncertainty": CONFIG["beta_uncertainty"], # Pass penalty coefficients for mode collapse and epistemic uncertainty
+        "reward_scale": CONFIG["reward_scale"], "property_ceiling": 12.0,                   # Pass final multiplication scalars to match gradient magnitudes
+        "use_warhead": CONFIG.get("use_warhead", False),                                    # Stage-3: thread warhead flag to chem_env._terminal_reward -> reward/warhead.py
+        "w_warhead": CONFIG.get("w_warhead", 0.15),                                         # Stage-3: warhead bonus weight passed to reward/composite.combine()
+    }                                                                                       # Close the reward configuration dictionary
 
     env = VectorMoleculeEnv(CONFIG["num_envs"], device, action_spec=spec,
                             affinity_scorer=affinity_scorer, diversity_archive=diversity_archive,
-                            reward_cfg=reward_cfg)                                                  # Initialize a vectorized environment for molecular generation (parallel simulation of multiple environments/molecules simultaneously).
+                            reward_cfg=reward_cfg)                                          # Initialize a vectorized environment for molecular generation (parallel simulation of multiple environments/molecules simultaneously).
     
     # Also if enabled from config, load the pocket embedding
-    pocket_dim = 0                                                                                  # Initialize the target pocket dimensionality fallback counter to zero
-    pocket_vec = None                                                                               # Initialize the FiLM modulation vector placeholder to None by default
-    if CONFIG["use_pocket"]:                                                                        # Check if the structural pocket conditioning flag is active
-        import numpy as _np                                                                         # Import numpy strictly for loading the localized pre-computed embeddings
-        pocket_vec = _np.load(CONFIG["pocket_npy"])                                                 # 1-D pocket embedding (ESM or deterministic fallback)
-        pocket_dim = int(pocket_vec.shape[0])                                                       # Extract the exact feature length of the loaded pocket embedding vector
-        print(f"[stage2] pocket conditioning ON (dim={pocket_dim}) from {CONFIG['pocket_npy']}")    # Echo the pocket FiLM network activation to the terminal
+    pocket_dim = 0                                                                          # Initialize the target pocket dimensionality fallback counter to zero
+    pocket_vec = None                                                                       # Initialize the FiLM modulation vector placeholder to None by default
+    if CONFIG["use_pocket"]:                                                                # Check if the structural pocket conditioning flag is active
+        import numpy as _np                                                                 # Import numpy strictly for loading the localized pre-computed embeddings
+        pocket_vec = _np.load(CONFIG["pocket_npy"])                                         # 1-D pocket embedding (ESM or deterministic fallback)
+        pocket_dim = int(pocket_vec.shape[0])                                               # Extract the exact feature length of the loaded pocket embedding vector
+        print(f"[stage2] pocket conditioning ON (dim={pocket_dim}) from {CONFIG['pocket_npy']}") # Echo the pocket FiLM network activation to the terminal
     
+    # Instantiate a running statistics tracker to standardize value targets dynamically
+    ret_norm = RunningNorm()                                                                
     agent = MoleculeAgent(input_feats, num_actions, hidden_dim=CONFIG["hidden_dim"], edge_dim=CONFIG["edge_dim"], pocket_dim=pocket_dim).to(device) # Initialize the actor-critic neural network and dispatch its weights to compute memory
-    if pocket_vec is not None:                                                                      # Verify if a valid pocket embedding was successfully extracted
-        agent.set_pocket(pocket_vec)                                                                # Install the fixed single-target pocket vector used by FiLM
+    if pocket_vec is not None:                                                              # Verify if a valid pocket embedding was successfully extracted
+        agent.set_pocket(pocket_vec)                                                        # Install the fixed single-target pocket vector used by FiLM
     
     optimizer = optim.AdamW(agent.parameters(), lr=CONFIG["lr"])                            # Attach the AdamW gradient optimization algorithm to update the agent's tensor weights
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))                          # Initialize the gradient scaling engine to enable safe fp16 mixed precision
@@ -571,7 +577,7 @@ def train():
 
     out_dir = os.path.join("artifacts", run_name)                                           # Create an output directory for saving checkpoints and logs, organized under "artifacts" with a subdirectory named after the run.
     os.makedirs(out_dir, exist_ok=True)                                                     # Force create the directory structure ignoring any pre-existing warnings
-    logger = ResearchLogger({**CONFIG, "num_actions": num_actions, "input_feats": input_feats}, out_dir=out_dir)    # Spin up the local textual backup tracking engine
+    logger = ResearchLogger({**CONFIG, "num_actions": num_actions, "input_feats": input_feats}, out_dir=out_dir) # Spin up the local textual backup tracking engine
 
     # -------------------------------------------------------------------------------------
     # Outer Update Loop
@@ -708,23 +714,39 @@ def train():
                     surr2 = torch.clamp(ratio, 1.0 - CONFIG["clip_epsilon"], 1.0 + CONFIG["clip_epsilon"]) * adv_b # Compute the severely restricted clipped surrogate objective
                     policy_loss = -torch.min(surr1, surr2).mean()                           # PPO policy loss with clipping: For each batch row, select pessimistic bound and invert for descent
 
-                    # Value loss is computed as the maximum between the squared error of the current value 
-                    # estimates (current value - buffer return)^2 and the squared error of the clipped value 
-                    # estimates (clipped buffer value - buffer return)^2, averaged over the batch.
-                    values_old = buffer.values[idx]                                             # Retrieve the historic value expectations stored in the replay memory
-                    values_clipped = values_old + torch.clamp(                                  # Compute pessimistic boundary constraining how fast the critic is allowed to update
-                        values - values_old, -CONFIG["clip_epsilon"], CONFIG["clip_epsilon"]    # Clamp delta to hyperparameter threshold
-                    )                                                                           # Close clipped value boundary
-                    vloss1 = (values - returns_b).pow(2)                                        # Calculate raw Mean Squared Error against true returns
-                    vloss2 = (values_clipped - returns_b).pow(2)                                # Calculate heavily penalized MSE using the restricted clipped estimations
-                    value_loss = 0.5 * torch.max(vloss1, vloss2).mean()                         # PPO value loss with clipping: choose the worst case bounding error to optimize
+                    # -----------------------------------------------------------------------------
+                    # Value Standardisation and Huber Loss (Stage-3 Upgrade)
+                    # To prevent the critic from receiving exploding gradients due to occasional 
+                    # massive reward spikes, value targets (returns) and predictions are standardized 
+                    # dynamically before computing the Huber (Smooth L1) loss instead of standard MSE.
+                    # -----------------------------------------------------------------------------
+                    values_old = buffer.values[idx]                                         # Retrieve the historic value expectations stored in the replay memory
+                    values_clipped = values_old + torch.clamp(                              # Compute pessimistic boundary constraining how fast the critic is allowed to update
+                        values - values_old, -CONFIG["clip_epsilon"], CONFIG["clip_epsilon"]# Clamp delta to hyperparameter threshold
+                    )                                                                       # Close clipped value boundary
+                    
+                    # For each batch row and each epoch, standardise value targets and predictions
+                    # with the running global return statistics (mean and standard deviation). 
+                    # Normalising inside the loss only means `values` stays in raw units, so GAE 
+                    # bootstrapping is untouched.
+                    ret_norm.update(returns_b)                                              # Fold this minibatch's returns into the running statistics tracker
+                    _mu, _sd = ret_norm.mean, ret_norm.std                                  # Extract current center (mean) and scale (standard deviation) parameters
+                    _ret_n = (returns_b - _mu) / _sd                                        # Standardise the true regression targets
+                    _val_n = (values - _mu) / _sd                                           # Standardise the raw network value prediction
+                    _valc_n = (values_clipped - _mu) / _sd                                  # Standardise the clipped value prediction
+                    
+                    # SmoothL1 (Huber loss) is used to bound the gradient's magnitude
+                    # from the rare large-|return| targets that reward_scale=12 produces.
+                    vloss1 = F.smooth_l1_loss(_val_n, _ret_n, reduction="none")             # Compute the Huber error against the true returns (bounds outlier gradients)
+                    vloss2 = F.smooth_l1_loss(_valc_n, _ret_n, reduction="none")            # Compute the Huber error using the restricted clipped value estimates
+                    value_loss = torch.max(vloss1, vloss2).mean()                           # PPO clipped value loss: select the worst-case bounding Huber error to optimize
 
                     # Entropy is the expectation of the negative log probability of the current policy, averaged over the batch. 
-                    entropy = dist.entropy().mean()                                             # Extract the numeric average entropy of the newly parameterized distribution
+                    entropy = dist.entropy().mean()                                         # Extract the numeric average entropy of the newly parameterized distribution
                     
                     # Loss is the weighted sum of the policy loss, value loss, and entropy, with the 
                     # two last terms are scaled by a coefficient. Entropy is subtracted to encourage exploration in action selection.
-                    loss = policy_loss + CONFIG["value_coef"] * value_loss - ent_coef * entropy     # Aggregate actor error, scaled critic error, and subtracted exploration bonus
+                    loss = policy_loss + CONFIG["value_coef"] * value_loss - ent_coef * entropy # Aggregate actor error, scaled critic error, and subtracted exploration bonus
 
                 # Backpropagate the loss through the network and update the network weights.
                 optimizer.zero_grad(set_to_none=True)                                       # Erase historical accumulated gradient tensors to prevent compounding (set_to_none is faster and frees memory)
@@ -748,11 +770,11 @@ def train():
 
             # Early Stopping against catastrophic unlearning: If the average KL divergence
             # for this epoch exceeds the threshold (CONFIG["target_kl"]), break out of the PPO update loop.
-            if CONFIG["target_kl"] is not None:                                                 # If the target KL divergence is specified in the CONFIG
-                mean_kl = float(np.mean(epoch_kls)) if epoch_kls else 0.0                       # Mathematically average out the KL drift spanning the inner batch loops
-                approx_kls.append(mean_kl)                                                      # Add computed average to the master loop logging arrays
-                if mean_kl > CONFIG["target_kl"]:                                               # If the average KL divergence for this epoch exceeds the target KL specified in the CONFIG, break out of the PPO update loop.
-                    break                                                                       # Violently terminate internal learning epochs guarding against catastrophic unlearning
+            if CONFIG["target_kl"] is not None:                                             # If the target KL divergence is specified in the CONFIG
+                mean_kl = float(np.mean(epoch_kls)) if epoch_kls else 0.0                   # Mathematically average out the KL drift spanning the inner batch loops
+                approx_kls.append(mean_kl)                                                  # Add computed average to the master loop logging arrays
+                if mean_kl > CONFIG["target_kl"]:                                           # If the average KL divergence for this epoch exceeds the target KL specified in the CONFIG, break out of the PPO update loop.
+                    break                                                                   # Violently terminate internal learning epochs guarding against catastrophic unlearning
 
         # ---------------------------------------------------------------------------------
         # Logging & Model Evaluation
@@ -779,16 +801,16 @@ def train():
 
             # Stage-2 Reward Diagnostics
             # Extract the info dictionaries (P, A, D, aff_hat_z, aff_unc_z) from each sub-environment (empty if the episode has not terminated yet).
-            _infos = [i for i in env.last_reward_infos() if i]                                      # Extract the cache of info dictionaries spanning the most recent episodic terminations
+            _infos = [i for i in env.last_reward_infos() if i]                              # Extract the cache of info dictionaries spanning the most recent episodic terminations
             # Local helper function that safely computes means for a specific dictionary key (could be any from "P" to "aff_unc_z"). 
             # Fallback safely to a mathematical NaN if the key is not present.
-            def _meankey(k):                                                                        # Define a local helper function to safely compute means for specific reward components
-                vals = [i[k] for i in _infos if i.get(k) is not None]                               # Extract valid numerical values for the requested tracking key from all info dicts
-                return float(np.mean(vals)) if vals else float("nan")                               # Compute the arithmetic mean or fallback safely to a mathematical NaN
+            def _meankey(k):                                                                # Define a local helper function to safely compute means for specific reward components
+                vals = [i[k] for i in _infos if i.get(k) is not None]                       # Extract valid numerical values for the requested tracking key from all info dicts
+                return float(np.mean(vals)) if vals else float("nan")                       # Compute the arithmetic mean or fallback safely to a mathematical NaN
             # Compute the mean values for the "A", "D", "aff_hat_z", and "aff_unc_z" keys 
             # from the most recent reward diagnostics from the info dictionaries.
-            s2_aff_hat = _meankey("aff_hat_z"); s2_aff_unc = _meankey("aff_unc_z")                  # Compute means for the z-scored affinity predictions and surrogate ensemble uncertainties
-            s2_aff_term = _meankey("A"); s2_div_pen = _meankey("D")                                 # Compute means for the final weighted affinity term and the diversity penalty term
+            s2_aff_hat = _meankey("aff_hat_z"); s2_aff_unc = _meankey("aff_unc_z")          # Compute means for the z-scored affinity predictions and surrogate ensemble uncertainties
+            s2_aff_term = _meankey("A"); s2_div_pen = _meankey("D")                         # Compute means for the final weighted affinity term and the diversity penalty term
             
             wandb.log(                                                                      # Package data and emit remote network POST over to Weights & Biases
                 {                                                                           # Begin payload dict

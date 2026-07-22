@@ -1,17 +1,17 @@
 """
-====================================
-Stage-3 Active Learning Orchestrator
-====================================
+================================================
+Stage-3 Runner — Closed-Loop Active Learning (RL)
+================================================
 
-This script serves as the definitive, runnable entry point for the Stage-3 closed-loop active learning 
-phase. The core logic resides in `activelearn/loop.py` (which intentionally lacks a `__main__` block), 
-requiring this driver to precisely reconstruct the Stage-2 training environment before execution. 
-If the environment factory or the exact action-space dimensions do not match the Stage-2 checkpoint 
-exactly, loading the pre-trained policy becomes impossible.
+This is the single, runnable entry point for the Stage-3 closed-loop active learning loop. 
+The core logic resides in `activelearn/loop.py`, which deliberately ships without a `__main__` block.
+This driver script bridges that gap by flawlessly reconstructing the Stage-2 training environment 
+before execution. If the environment factory or the exact action-space dimensions do not match 
+the Stage-2 checkpoint exactly, the policy load becomes meaningless.
 
 What this script wires together to prevent configuration drift:
     - ActionSpec(max_atoms=25): Defines the flat discrete action space (`num_actions`).
-    - node_dim: Computed as `len(atom_types) + 3 + 3`, aligning with the GNN input width expected by the checkpoint.
+    - node_dim: Computed as `len(atom_types) + 3 + 3`, aligning with the GNN input width the checkpoint expects.
     - hidden_dim=128, edge_dim=4: The explicitly trained network widths (overriding any default class values like 64).
     - make_env(): A factory that produces a clean `MoleculeEnvironment` for rapid sampling. It deliberately 
       turns off affinity and diversity scoring to skip expensive per-step oracle calls during pure generation.
@@ -29,9 +29,9 @@ Run this script from the `src/` directory to maintain repo conventions:
         --out_dir ../artifacts/active_learning \
         --rounds 3 --pool 3000 --n_dock 250
 
-Note: The `--out_dir` is designed to be a STABLE, resumable directory (without dynamic timestamps). 
-Re-executing the exact same command after an interruption will skip completed rounds and reuse 
-the on-disk docking cache automatically.
+Note: The `--out_dir` is designed to be a STABLE, resumable directory (no per-launch timestamp). 
+Re-executing the exact same command after an interruption or on a fresh AWS account will skip 
+any round already completed and reuse the on-disk docking cache automatically.
 """
 
 import argparse
@@ -75,14 +75,16 @@ def build_make_env(spec, device):
     """
     # -------------------------------------------------------------------------------------
     # Environment Factory Setup
-    # Hardcode reward mechanisms to off, creating a lightweight simulator for fast sampling.
+    # Safely construct the reward config by inheriting (all the required downstream) project 
+    # defaults, then disable expensive oracles to ensure lightweight, rapid sampling.
     # -------------------------------------------------------------------------------------
-    reward_cfg = {"use_affinity": False, "use_diversity": False, "use_warhead": False}              # Define a minimal config explicitly disabling all expensive reward-time oracles
-    
+    from reward.composite import default_reward_cfg as _drc                                         # Import the authoritative default reward configuration factory to inherit expected keys
+    reward_cfg = dict(_drc())                                                                       # Instantiate a base configuration dictionary containing all requisite reward thresholds
+    reward_cfg.update(use_affinity=False, use_diversity=False, use_warhead=False)                   # Explicitly disable computationally heavy scoring oracles for the rapid sampling phase
+    reward_cfg.setdefault("property_ceiling", 12.0)                                                 # Ensure the property ceiling key is safely populated to prevent downstream KeyErrors
     def _make():                                                                                    # Define the internal closure that serves as the zero-argument factory
         return MoleculeEnvironment(device, max_steps=40, action_spec=spec, min_atoms=5,             # Instantiate the environment mirroring Stage-2 trajectory bounds
                                    affinity_scorer=None, diversity_archive=None, reward_cfg=reward_cfg) # Omit complex oracles to ensure ultra-fast, unhindered generation steps
-    
     return _make                                                                                    # Return the assembled factory closure to the calling scope
 
 
